@@ -2,9 +2,12 @@
 """Check every dump under the given folder (default: current folder).
 
 A dump is OK when:
-  - its dump log (<name>.log) says "0 sectors could not be read",
+  - its dump log (<name>.log) says "0 sectors could not be read"; older logs
+    never say how many sectors could not be read, so for them (or when there
+    is no dump log at all) the resume file is the only source of truth,
   - its verify log (<name>.verify.log), if there is one, has 0 errors+unknowns,
-  - its resume file (<name>.resume.json) has no bad blocks.
+  - its resume file (<name>.resume.json) has no bad blocks and reached the
+    last block.
 
 When a log contains several runs (resumed dumps, repeated verifies), the last
 result is the one that counts."""
@@ -51,14 +54,11 @@ def check_dump(folder, name):
     """List of problems found in a dump, empty if it is OK."""
     problems = []
 
+    # Older logs have no result line, then only the resume file counts
     log = folder / f"{name}.log"
-    if not log.is_file():
-        problems.append("no dump log")
-    else:
+    if log.is_file():
         unreadable = last_match(log, UNREADABLE_RE)
-        if unreadable is None:
-            problems.append("dump log has no result (dump did not finish?)")
-        elif unreadable:
+        if unreadable:
             problems.append(f"{unreadable} sectors could not be read")
 
     verify = folder / f"{name}.verify.log"

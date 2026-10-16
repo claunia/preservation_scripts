@@ -21,6 +21,10 @@
 #   -d, --device DEV         sr0 (default), sr1, sr2, morgay, khepri, or any path/aaru:// URI
 #   -t, --preset PRESET      see table above (default: plain)
 #   -r, --passes N           number of retry passes (aaru -p N)
+#   -n, --no-retry-sectors LIST
+#                            comma separated sectors or start-end ranges that will
+#                            not be trimmed nor retried, e.g. 1234,54000-58000
+#                            (needs a recent aaru)
 #
 #   -K, --skip-safedisc      do NOT retry sectors 800-10000 (SafeDisc area)
 #   -k, --no-skip-safedisc   DO retry sectors 800-10000 like any other bad sector
@@ -56,6 +60,7 @@ scan=
 dpm=
 skip_safedisc=
 passes=
+no_retry_sectors=
 
 args=()
 for arg in "$@"; do
@@ -63,6 +68,7 @@ for arg in "$@"; do
         --device)            args+=(-d) ;;
         --preset)            args+=(-t) ;;
         --passes)            args+=(-r) ;;
+        --no-retry-sectors)  args+=(-n) ;;
         --skip-safedisc)     args+=(-K) ;;
         --no-skip-safedisc)  args+=(-k) ;;
         --scan)              args+=(-S) ;;
@@ -80,7 +86,7 @@ for arg in "$@"; do
 done
 set -- "${args[@]}"
 
-while getopts "d:t:HhVvSsPpKkr:" opt; do
+while getopts "d:t:HhVvSsPpKkr:n:" opt; do
     case "$opt" in
         d) device="$OPTARG" ;;
         t) preset="$OPTARG" ;;
@@ -95,6 +101,7 @@ while getopts "d:t:HhVvSsPpKkr:" opt; do
         K) skip_safedisc=1 ;;
         k) skip_safedisc=0 ;;
         r) passes="$OPTARG" ;;
+        n) no_retry_sectors="$OPTARG" ;;
         *) sed -n '2,/^$/p' "$0"; exit 1 ;;
     esac
 done
@@ -138,6 +145,19 @@ if ! [[ "$passes" =~ ^[0-9]+$ ]]; then
     echo "Invalid number of passes: $passes" >&2
     exit 1
 fi
+if [ -n "$no_retry_sectors" ]; then
+    IFS=, read -ra items <<< "$no_retry_sectors"
+    for item in "${items[@]}"; do
+        if [[ "$item" =~ ^([0-9]+)-([0-9]+)$ ]] && (( BASH_REMATCH[1] <= BASH_REMATCH[2] )); then
+            continue
+        fi
+        if ! [[ "$item" =~ ^[0-9]+$ ]]; then
+            echo "Invalid sector list: $no_retry_sectors (expected e.g. 1234,54000-58000)" >&2
+            exit 1
+        fi
+    done
+    extra+=(--no-retry-sectors "$no_retry_sectors")
+fi
 dpm="${dpm:-$preset_dpm}"
 skip_safedisc="${skip_safedisc:-$preset_skip_safedisc}"
 [ "$skip_safedisc" = 1 ] && extra+=(--skip-safedisc)
@@ -163,6 +183,7 @@ if [ "$skip_safedisc" = 1 ]; then
 else
     echo "SafeDisc sectors:      retried like any other  ($o_skip)"
 fi
+[ -n "$no_retry_sectors" ] && echo "Never retried:         $no_retry_sectors  (option)"
 echo "ProtectionScan:        $(yesno "$scan")  ($o_scan)"
 echo "Verify after dump:     $(yesno "$verify")  ($o_verify)"
 echo "DPM:                   $(yesno "$dpm")  ($o_dpm)"

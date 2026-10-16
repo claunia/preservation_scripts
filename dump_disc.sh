@@ -21,6 +21,7 @@
 #   -d, --device DEV         sr0 (default), sr1, sr2, morgay, khepri, or any path/aaru:// URI
 #   -t, --preset PRESET      see table above (default: plain)
 #   -r, --passes N           number of retry passes (aaru -p N)
+#   -R, --start-reverse      retry errors starting from the end (needs a recent aaru)
 #   -n, --no-retry-sectors LIST
 #                            comma separated sectors or start-end ranges that will
 #                            not be trimmed nor retried, e.g. 1234,54000-58000
@@ -61,6 +62,7 @@ dpm=
 skip_safedisc=
 passes=
 no_retry_sectors=
+reverse=0
 
 args=()
 for arg in "$@"; do
@@ -69,6 +71,7 @@ for arg in "$@"; do
         --preset)            args+=(-t) ;;
         --passes)            args+=(-r) ;;
         --no-retry-sectors)  args+=(-n) ;;
+        --start-reverse)     args+=(-R) ;;
         --skip-safedisc)     args+=(-K) ;;
         --no-skip-safedisc)  args+=(-k) ;;
         --scan)              args+=(-S) ;;
@@ -86,7 +89,7 @@ for arg in "$@"; do
 done
 set -- "${args[@]}"
 
-while getopts "d:t:HhVvSsPpKkr:n:" opt; do
+while getopts "d:t:HhVvSsPpKkr:n:R" opt; do
     case "$opt" in
         d) device="$OPTARG" ;;
         t) preset="$OPTARG" ;;
@@ -102,6 +105,7 @@ while getopts "d:t:HhVvSsPpKkr:n:" opt; do
         k) skip_safedisc=0 ;;
         r) passes="$OPTARG" ;;
         n) no_retry_sectors="$OPTARG" ;;
+        R) reverse=1 ;;
         *) sed -n '2,/^$/p' "$0"; exit 1 ;;
     esac
 done
@@ -158,6 +162,7 @@ if [ -n "$no_retry_sectors" ]; then
     done
     extra+=(--no-retry-sectors "$no_retry_sectors")
 fi
+[ "$reverse" = 1 ] && extra+=(--start-reverse)
 dpm="${dpm:-$preset_dpm}"
 skip_safedisc="${skip_safedisc:-$preset_skip_safedisc}"
 [ "$skip_safedisc" = 1 ] && extra+=(--skip-safedisc)
@@ -183,6 +188,7 @@ if [ "$skip_safedisc" = 1 ]; then
 else
     echo "SafeDisc sectors:      retried like any other  ($o_skip)"
 fi
+[ "$reverse" = 1 ] && echo "Retry order:           reverse  (option)"
 [ -n "$no_retry_sectors" ] && echo "Never retried:         $no_retry_sectors  (option)"
 echo "ProtectionScan:        $(yesno "$scan")  ($o_scan)"
 echo "Verify after dump:     $(yesno "$verify")  ($o_verify)"

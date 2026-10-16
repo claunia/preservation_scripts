@@ -13,7 +13,7 @@
 #   safedisc        yes   no      yes  YES            3       paranoia                (dump_safedisc.sh)
 #   retry-safedisc  no    no      yes  no             1       paranoia, --retry-subchannel=false
 #   retry-errors    no    no      NO   no             3       paranoia
-#   movie           no    no      yes  no             3       --title-keys=false --raw
+#   movie           no    no      NO   no             3       --title-keys=false --raw
 #
 #   Hyper-speed is off for every preset. Underscores work too (retry_errors).
 #
@@ -133,7 +133,7 @@ case "$preset" in
     safedisc) extra=(--paranoia --cure-paranoia); preset_scan=1; preset_skip_safedisc=1 ;;
     retry-safedisc) extra=(--paranoia --cure-paranoia); preset_passes=1; subchannel_retry=(--retry-subchannel=false) ;;
     retry-errors) extra=(--paranoia --cure-paranoia); preset_dpm=0 ;;
-    movie)    extra=(--title-keys=false --raw) ;;
+    movie)    extra=(--title-keys=false --raw); preset_dpm=0 ;;
     *) echo "Unknown preset: $preset" >&2; exit 1 ;;
 esac
 # Where each setting comes from, for the summary

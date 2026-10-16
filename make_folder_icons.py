@@ -10,8 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-PREFERRED = ("cover.jxl", "front.jxl", "media.jxl", "up.jxl")
-KEEP_SINGLE = ("cover.jxl", "front.jxl", "media.jxl")
+PREFERRED = ("cover.jxl", "front.jxl", "media.jxl", "media1.jxl", "up.jxl")
+KEEP_SINGLE = ("cover.jxl", "front.jxl", "media.jxl", "media1.jxl")
 TOOLS = ("magick", "optipng", "icotool")
 
 DESKTOP_INI = "[.ShellClassInfo]\nIconResource=.\\desktop.ico,0"
@@ -51,7 +51,7 @@ def process(folder, dry_run):
 
     src = next((by_name[n] for n in PREFERRED if n in by_name), None)
     if src is None:
-        print(f"skip: {folder} (no cover/front/media/up.jxl)")
+        print(f"skip: {folder} (no cover/front/media/media1/up.jxl)")
         return
 
     if dry_run:

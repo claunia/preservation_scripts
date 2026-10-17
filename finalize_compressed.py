@@ -6,7 +6,9 @@ Walks a directory tree looking for "<name>.compressed.aif" files that have a
 matching "<name>.convert.log" and "<name>.compare.log". For each one it checks:
 
   * the convert log ends with "Conversion done"
-  * the compare log ends with "Images have identical contents"
+  * the last run in the compare log says "Images have identical contents",
+    and, if it compared the Data Position Measurements that follow it, that
+    they "match within the measurement noise"
   * if "<name>.verify.log" exists, "Total errors+unknowns" is 0
 
 If everything passes, "<name>.compressed.aif" replaces "<name>.aif" and the
@@ -32,6 +34,16 @@ CLEANUP_SUFFIXES = (
     ".verify.png",
 )
 VERIFY_RE = re.compile(r"Total errors\+unknowns:\s*(\d+)")
+
+# Every aaru run appends to the log starting with this line
+RUN_START = "Start logging at"
+IDENTICAL = "Images have identical contents"
+DPM_TITLE = "Data Position Measurement comparison"
+DPM_MATCH = "Data Position Measurements match within the measurement noise"
+DPM_PROBLEMS = (
+    "Only the first image has a Data Position Measurement",
+    "Only the second image has a Data Position Measurement",
+)
 
 
 class C:
@@ -61,6 +73,26 @@ def last_line(path: Path) -> str:
     return lines[-1] if lines else ""
 
 
+def check_compare(compare: Path) -> list[str]:
+    """Check the last run in a compare log, contents and DPM. Returns error messages."""
+    text = compare.read_text(encoding="utf-8", errors="replace")
+    run = text[max(0, text.rfind(RUN_START)):]
+
+    if IDENTICAL not in run:
+        verdict = next((l.strip() for l in run.splitlines() if l.startswith("Images have ")), None)
+        found = f"it says {verdict!r}" if verdict else f"last line: {last_line(compare) or '<empty>'!r}"
+        return [f"Compare log does not say '{IDENTICAL}' ({found})"]
+
+    # Newer aaru compares the Data Position Measurements after the contents
+    errors = [f"Compare log says '{p}'" for p in DPM_PROBLEMS if p in run]
+    if DPM_TITLE in run and DPM_MATCH not in run:
+        dpm = run[run.rfind(DPM_TITLE):].splitlines()
+        result = next((l for l in reversed(dpm) if l.strip()), "")
+        errors.append(f"Data Position Measurements do not match (last line: {result.strip()!r})")
+
+    return errors
+
+
 def check(base: Path) -> list[str]:
     """Run all checks for an image base path (no extension). Returns error messages."""
     errors = []
@@ -71,9 +103,7 @@ def check(base: Path) -> list[str]:
         errors.append(f"Convert log does not end in 'Conversion done' (last line: {line or '<empty>'!r})")
 
     compare = base.with_name(base.name + ".compare.log")
-    line = last_line(compare)
-    if "Images have identical contents" not in line:
-        errors.append(f"Compare log does not end in 'Images have identical contents' (last line: {line or '<empty>'!r})")
+    errors.extend(check_compare(compare))
 
     verify = base.with_name(base.name + ".verify.log")
     if verify.exists():

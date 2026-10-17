@@ -18,7 +18,7 @@ from pathlib import Path
 
 PREFERRED = ("cover.jxl", "front.jxl", "media.jxl", "media1.jxl", "up.jxl")
 KEEP_SINGLE = ("cover.jxl", "front.jxl", "media.jxl", "media1.jxl", "inlay.jxl")
-TOOLS = ("magick", "optipng", "icotool")
+TOOLS = ("magick", "oxipng", "icotool")
 
 # Inlay width x height in mm, the front cover is the rightmost COVER_MM of it
 INLAYS = {"DVD": (273, 183), "Blu-ray": (273, 148)}
@@ -37,7 +37,7 @@ def make_png(src, dst, size):
     geometry = f"{size}x{size}"
     run("magick", str(src), "-resize", geometry, "-background", "none",
         "-gravity", "center", "-extent", geometry, "-depth", "8", str(dst))
-    run("optipng", "-quiet", "-o7", str(dst))
+    run("oxipng", "--quiet", "-o", "max", str(dst))
 
 
 def image_size(path):

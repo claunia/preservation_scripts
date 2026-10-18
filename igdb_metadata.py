@@ -34,7 +34,6 @@ import difflib
 import json
 import os
 import re
-import shutil
 import sys
 import time
 import urllib.error
@@ -43,21 +42,17 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import readline
-except ImportError:
-    readline = None
+from metadata_ui import (AARU_LANGUAGES, KEY_ORDER, RELEASE_TYPES, Quit, ask, choose_part, confirm,
+                         console, disc_title, fail, folder_barcodes, human_size, image_name, iso_date, keys, load,
+                         media_list, metadata_files, parse_barcodes, part_candidates, part_numbers_in, save, set_parts,
+                         unique)
 
-try:
-    from rich import box
-    from rich.console import Console, Group
-    from rich.panel import Panel
-    from rich.rule import Rule
-    from rich.table import Table
-    from rich.text import Text
-except ImportError:
-    sys.exit("This script needs the 'rich' Python module: run it with /usr/bin/python3, install python-rich, "
-             "or use 'uv run igdb_metadata.py'.")
+from rich import box
+from rich.console import Group
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 KEY_FILE = SCRIPT_DIR / "igdb_key.json"
@@ -65,22 +60,8 @@ TOKEN_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "
 API = "https://api.igdb.com/v4/"
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 
-console = Console(highlight=False)
 
-# Order of the fields in the Aaru Metadata class, which is also the order Aaru writes them in
-KEY_ORDER = ("Developers", "Publishers", "Authors", "Performers", "Name", "Version", "Release", "ReleaseDate",
-             "Barcodes", "PartNumber", "SerialNumber", "Keywords", "Magazines", "Books", "Categories",
-             "Subcategories", "Languages", "Systems", "Architectures", "RequiredOperatingSystems", "UserManuals",
-             "OpticalDiscs", "Advertisements", "LinearMedias", "PciCards", "BlockMedias", "AudioMedias")
-MEDIA_KEYS = ("OpticalDiscs", "BlockMedias", "LinearMedias", "AudioMedias")
-
-RELEASE_TYPES = ("Retail", "Bundle", "Coverdisc", "Subscription", "Demo", "OEM", "Shareware", "FOSS", "Adware",
-                 "Donationware", "DigitalDownload", "SaaS")
 DEFAULT_CATEGORIES = ["Videogame"]
-# Aaru.CommonTypes/AaruMetadata/Barcode.cs
-BARCODE_TYPES = ("Aztec", "Codabar", "Code11", "Code128", "Code39", "Code93", "CPC_Binary", "EZcode", "FIM", "ITF",
-                 "ITF14", "EAN13", "EAN8", "MaxiCode", "ISBN", "ISRC", "MSI", "ShotCode", "RM4SCC", "QR", "EAN5", "EAN2",
-                 "POSTNET", "PostBar", "Plessey", "Pharmacode", "PDF417", "PatchCode")
 
 # Folder names (anywhere in the path, the deepest one wins) to the IGDB platform names they stand for
 PLATFORMS = {
@@ -127,26 +108,6 @@ ISO639_1 = {
     "no": "nor", "pl": "pol", "pt": "por", "ro": "rum", "ru": "rus", "sk": "slo", "sl": "slv", "sr": "srp",
     "sv": "swe", "th": "tha", "tl": "tgl", "tr": "tur", "uk": "ukr", "vi": "vie", "zh": "chi",
 }
-# Every language code Aaru knows (Aaru.CommonTypes/AaruMetadata/Language.cs)
-AARU_LANGUAGES = set("""
-aar abk ace ach ada ady afa afh afr ain aka akk alb ale alg alt amh ang anp apa ara arc arg arm arn arp art arw asm
-ast ath aus ava ave awa aym aze bad bai bak bal bam ban baq bas bat bej bel bem ben ber bho bih bik bin bis bla bnt
-bos bra bre btk bua bug bul bur byn cad cai car cat cau ceb cel cha chb che chg chi chk chm chn cho chp chr chu chv
-chy cmc cop cor cos cpe cpf cpp cre crh crp csb cus cze dak dan dar day del den dgr din div doi dra dsb dua dum dut
-dyu dzo efi egy eka elx eng enm epo est ewe ewo fan fao fat fij fil fin fiu fon fre frm fro frr frs fry ful fur gaa
-gay gba gem geo ger gez gil gla gle glg glv gmh goh gon gor got grb grc gre grn gsw guj gwi hai hat hau haw heb her
-hil him hin hit hmn hmo hrv hsb hun hup iba ibo ice ido iii ijo iku ile ilo ina inc ind ine inh ipk ira iro ita jav
-jbo jpn jpr jrb kaa kab kac kal kam kan kar kas kau kaw kaz kbd kha khi khm kho kik kin kir kmb kok kom kon kor kos
-kpe krc krl kro kru kua kum kur kut lad lah lam lao lat lav lez lim lin lit lol loz ltz lua lub lug lui lun luo lus
-mac mad mag mah mai mak mal man mao map mar mas may mdf mdr men mga mic min mis mkh mlg mlt mnc mni mno moh mon mos
-mul mun mus mwl mwr myn myv nah nai nap nau nav nbl nde ndo nds nep nia nic niu nno nob nog non nor nqo nso nub nwc
-nya nym nyn nyo nzi oci oji ori orm osa oss ota oto paa pag pal pam pan pap pau peo per phi phn pli pol pon por pra
-pro pus que raj rap rar roa roh rom rum run rup rus sad sag sah sai sal sam san sas sat scn sco sel sem sga sgn shn
-sid sin sio sit sla slo slv sma sme smi smj smn smo sms sna snd snk sog som son sot spa srd srn srp srr ssa ssw suk
-sun sus sux swa swe syc syr tah tai tam tat tel tem ter tet tgk tgl tha tib tig tir tiv tkl tlh tli tmh tog ton tpi
-tsi tsn tso tuk tum tup tur tut tvl twi tyv udm uga uig ukr umb und urd uzb vai ven vie vol vot wak wal war was wel
-wen wln wol xal xho yao yap yid yor ypk zap zbl zen zgh zha znd zul zun zxx zza
-""".split())
 
 # IGDB genres to the subcategory names used in the existing metadata; others lose their "(ABBR)" suffix
 GENRES = {
@@ -173,10 +134,6 @@ DETAIL_FIELDS = GAME_FIELDS + (
     "language_supports.language.name", "language_supports.language_support_type.name")
 # Types that are rarely what a dump is, listed after the others
 MINOR_TYPES = ("Mod", "Update", "Fork", "Season", "Episode", "Pack", "DLC")
-
-
-class Quit(Exception):
-    pass
 
 
 # ---------------------------------------------------------------- IGDB
@@ -345,15 +302,6 @@ def companies(game, role):
 
 def all_names(game):
     return [game.get("name", "")] + [a["name"] for a in game.get("alternative_names") or [] if "name" in a]
-
-
-def unique(items):
-    seen, result = set(), []
-    for item in items:
-        if item and item.casefold() not in seen:
-            seen.add(item.casefold())
-            result.append(item)
-    return result
 
 
 def on_platform(game, platforms):
@@ -543,90 +491,12 @@ def name_source(game, name, folder):
     return "folder name"
 
 
-def ean_valid(digits):
-    """GS1 check digit (EAN-13, EAN-8, ITF-14)."""
-    body, check = digits[:-1], int(digits[-1])
-    total = sum(int(d) * (3 if i % 2 == 0 else 1) for i, d in enumerate(reversed(body)))
-    return (10 - total % 10) % 10 == check
-
-
-def isbn_valid(digits):
-    """ISBN-10 (mod 11, X is 10) or ISBN-13 (an EAN-13 in the 978/979 Bookland prefixes)."""
-    if re.fullmatch(r"\d{9}[\dX]", digits):
-        return sum((10 - i) * (10 if d == "X" else int(d)) for i, d in enumerate(digits)) % 11 == 0
-    return bool(re.fullmatch(r"97[89]\d{10}", digits)) and ean_valid(digits)
-
-
-def parse_barcodes(text):
-    """"EAN13 8436...; ISBN 84-..." or bare codes (spaces and dashes allowed), several separated by ";". Bare codes
-    are told apart by length: 13 digits are an EAN-13, 12 an UPC-A, 8 an EAN-8 and 10 (the last may be X) an ISBN-10.
-    Aaru has no UPC-A type, but an UPC-A is the EAN-13 with a leading 0 (same check digit), so it is stored as that.
-    A 978/979 EAN-13 is also the ISBN-13 of the product, but it stays an EAN-13 unless written as "ISBN ...", so the
-    printed barcode and the ISBN (often the ISBN-10) can both be stored. ISBNs keep their dashes as written.
-    Returns (barcodes, error)."""
-    barcodes = []
-    for part in filter(None, (p.strip() for p in text.split(";"))):
-        if re.fullmatch(r"[\d\s-]+[xX]?", part):
-            kind, value = "", part
-        else:
-            kind, _, value = part.partition(" ")
-        value = value.strip().upper() if kind.upper() == "ISBN" or not kind else value.strip()
-        if kind.lower().replace("-", "") in ("upc", "upca"):
-            kind = "EAN13"
-        if kind:
-            matches = [t for t in BARCODE_TYPES if t.lower() == kind.lower()]
-            if not matches:
-                return None, f"Unknown barcode type “{kind}”, one of: {', '.join(BARCODE_TYPES)}"
-            kind = matches[0]
-        digits = re.sub(r"[\s-]", "", value)
-        if not kind:
-            if len(digits) == 10:
-                kind = "ISBN"
-            elif digits.isdigit() and len(digits) in (8, 12, 13):
-                if len(digits) == 12:
-                    if not ean_valid(digits):
-                        return None, f"Wrong check digit in UPC-A {digits} (mistyped, or an EAN-13 missing a digit?)"
-                    digits = "0" + digits
-                kind = "EAN8" if len(digits) == 8 else "EAN13"
-            else:
-                return None, (f"“{value}” is not an EAN-13, UPC-A, EAN-8 or ISBN-10: check it, or give its type "
-                              f"before it (e.g. ISBN {value})")
-        if kind == "EAN13" and len(digits) == 12 and digits.isdigit():
-            digits = "0" + digits  # an UPC-A
-        if kind in ("EAN13", "EAN8", "ITF14"):
-            length = {"EAN13": 13, "EAN8": 8, "ITF14": 14}[kind]
-            if not digits.isdigit() or len(digits) != length:
-                return None, f"An {kind} has {length} digits, “{value}” does not"
-            if not ean_valid(digits):
-                return None, f"Wrong check digit in {kind} {digits} (mistyped?)"
-            value = digits
-        elif kind == "ISBN":
-            if len(digits) not in (10, 13):
-                return None, f"An ISBN has 10 or 13 digits, “{value}” does not"
-            if not isbn_valid(digits):
-                return None, f"Wrong check digit in ISBN {value} (mistyped?)"
-            value = value.replace(" ", "-")
-        barcode = {"Type": kind, "Value": value}
-        if barcode not in barcodes:
-            barcodes.append(barcode)
-    return barcodes, None
-
-
-def folder_isbn(folder_name):
-    """An ISBN used as the product code in the folder name, e.g. "Aquanox (84-9738-024-X)"."""
-    for group in re.findall(r"[(\[]([^)\]]*)[)\]]", folder_name):
-        group = group.strip().upper()
-        if re.fullmatch(r"[\d-]+X?", group) and isbn_valid(group.replace("-", "")):
-            return group
-    return None
-
-
 def ask_barcode(field, folder_name):
     """Asks for the barcodes of a product that has none, setting them on the field."""
-    isbn = folder_isbn(folder_name)
-    if isbn:
-        console.print(f"[dim]The folder name has the ISBN {isbn}; add the EAN-13 after it if there is one[/dim]")
-    prefill = f"ISBN {isbn}; " if isbn else ""
+    found = folder_barcodes(folder_name)
+    if found:
+        console.print(f"[dim]From the folder name: {'; '.join(found)}; add the other barcodes after it[/dim]")
+    prefill = "; ".join(found) + "; " if found else ""
     while True:
         answer = ask("Barcode: EAN-13, UPC-A or ISBN, several separated by “;” (Enter for none): ", prefill)
         if not answer:
@@ -638,10 +508,6 @@ def ask_barcode(field, folder_name):
             continue
         field.set(barcodes, "edited")
         return
-
-
-def iso_date(date):
-    return date.strftime("%Y-%m-%dT00:00:00")
 
 
 def show(field, value):
@@ -671,37 +537,6 @@ SOURCES = {
 
 
 # ---------------------------------------------------------------- Prompts
-
-def ask(prompt, prefill=""):
-    """input() with a colored prompt and, when readline is there, an editable pre-filled answer."""
-    if console.no_color or not sys.stdout.isatty():
-        text = prompt
-    else:  # \001 \002 tell readline that the escape codes take no room
-        text = f"\001\033[1;36m\002{prompt}\001\033[0m\002"
-    if readline and prefill:
-        readline.set_startup_hook(lambda: readline.insert_text(prefill))
-    try:
-        return input(text).strip()
-    except (EOFError, KeyboardInterrupt):
-        console.print()
-        raise Quit
-    finally:
-        if readline and prefill:
-            readline.set_startup_hook()
-
-
-def confirm(prompt, default=False):
-    answer = ask(f"{prompt} [{'Y/n' if default else 'y/N'}] ").lower()
-    return default if not answer else answer.startswith(("y", "s"))
-
-
-def keys(*pairs):
-    """A line of [key] action hints."""
-    text = Text()
-    for key, action in pairs:
-        text.append(f" {key} ", style="bold black on cyan")
-        text.append(f" {action}   ")
-    return text
 
 
 # ---------------------------------------------------------------- Choosing the game
@@ -838,38 +673,9 @@ def choose_game(igdb, term, platforms, year=None, company=None, auto=True):
 
 # ---------------------------------------------------------------- Review
 
-def media_list(meta):
-    return [(key, m) for key in MEDIA_KEYS for m in meta.get(key) or []]
-
-
-def image_name(media):
-    image = media.get("Image")
-    return (image.get("Value") if isinstance(image, dict) else image) or ""
-
-
-def part_numbers_in(name):
-    """What is in parentheses or brackets in a name and looks like a part number: it has a digit (unlike "Codegame"
-    or "PC Plus"), is not a disc number ("CD 1", "Disc 2") and is not an ISBN (that is a barcode)."""
-    found = []
-    for group in re.findall(r"[(\[]([^)\]]*)[)\]]", name):
-        group = group.strip()
-        if (not re.search(r"\d", group)
-                or re.fullmatch(r"(?i)(cd|dvd|bd|gd|disc|disco|disk|disque|cara|side)[\s-]*\w{1,2}|\d{1,2}", group)
-                or (re.fullmatch(r"[\d-]+[xX]?", group) and isbn_valid(group.replace("-", "").upper()))):
-            continue
-        if group not in found:
-            found.append(group)
-    return found
-
 
 def part_numbers_choices(folder_name):
     return [("folder name", p) for p in part_numbers_in(folder_name)]
-
-
-def part_candidates(media):
-    """Possible part numbers of a disc, from its image name. Returns (where, value) pairs."""
-    stem = re.sub(r"(\.compressed)?\.aif$", "", image_name(media), flags=re.IGNORECASE)
-    return [("image name", p) for p in part_numbers_in(stem)]
 
 
 def media_table(meta, parts):
@@ -901,33 +707,6 @@ def part_changes(meta, parts):
     return sum(parts[i] != media[i][1].get("PartNumber") for i in parts)
 
 
-def choose_part(title, candidates, current):
-    """Asks for a part number. Returns the new value (None for none); Enter keeps the current one."""
-    table = Table(box=None, show_header=False, pad_edge=False)
-    table.add_column(style="bold cyan", justify="right")
-    table.add_column()
-    table.add_column(style="dim")
-    for i, (where, value) in enumerate(candidates, 1):
-        table.add_row(str(i), value, f"from the {where}")
-    console.print(Panel(table if candidates else Text("No suggestions", style="dim"),
-                        title=title, title_align="left",
-                        border_style="blue"))
-    hint = ("1 or " if len(candidates) == 1 else f"1-{len(candidates)} or ") if candidates else ""
-    if current:
-        answer = ask(f"Part number ({hint}type it, Enter keeps {current}, - for none): ")
-    else:
-        answer = ask(f"Part number ({hint}type it, Enter for none): ")
-    if answer.isdigit() and 1 <= int(answer) <= len(candidates):
-        return candidates[int(answer) - 1][1]
-    if answer == "-":
-        return None
-    return answer or current
-
-
-def disc_title(media):
-    return f"Part number of the disc {image_name(media) or '?'}"
-
-
 def ask_part_numbers(meta, parts):
     """Suggests a part number for every disc that has none and something in parentheses to take it from."""
     for i, (_, media) in enumerate(media_list(meta)):
@@ -943,15 +722,6 @@ def edit_part(meta, parts, answer):
         return
     disc = media[index][1]
     parts[index] = choose_part(disc_title(disc), part_candidates(disc), parts.get(index, disc.get("PartNumber")))
-
-
-def human_size(size):
-    if not size:
-        return ""
-    for unit in ("B", "KiB", "MiB", "GiB"):
-        if size < 1024 or unit == "GiB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
 
 
 def game_panel(game):
@@ -1121,15 +891,6 @@ def review(path, meta, game, fields, parts, exists, dry_run):
 
 # ---------------------------------------------------------------- Files
 
-def load(path):
-    if not path.exists():
-        return {"AaruMetadata": {}}
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data.get("AaruMetadata"), dict):
-        raise ValueError("not an Aaru metadata file (no AaruMetadata)")
-    return data
-
 
 def apply(meta, fields):
     for field in fields:
@@ -1139,41 +900,6 @@ def apply(meta, fields):
             meta[field.key] = field.value
     known = [k for k in KEY_ORDER if k in meta]
     return {**{k: meta[k] for k in known}, **{k: v for k, v in meta.items() if k not in known}}
-
-
-def set_parts(meta, parts):
-    media = media_list(meta)
-    for i, value in parts.items():
-        if value is None:
-            media[i][1].pop("PartNumber", None)
-        elif "PartNumber" in media[i][1]:
-            media[i][1]["PartNumber"] = value
-        else:
-            # Where Aaru puts it: after the checksums of the whole disc
-            disc = media[i][1]
-            before = [k for k in disc if k in ("Image", "Size", "Sequence", "Layers", "Checksums")]
-            at = list(disc).index(before[-1]) + 1 if before else 0
-            items = list(disc.items())
-            disc.clear()
-            disc.update(items[:at] + [("PartNumber", value)] + items[at:])
-
-
-def save(path, data):
-    if path.exists():
-        backup = path.with_name(path.name + ".bak")
-        if not backup.exists():  # never overwrite the original backup on re-runs
-            shutil.copy2(path, backup)
-
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    tmp.replace(path)
-
-
-def metadata_files(folder):
-    if (folder / "metadata.json").exists():
-        return [folder / "metadata.json"]
-    return sorted(folder.glob("*.metadata.json")) or [folder / "metadata.json"]
 
 
 def complete(meta):
@@ -1263,11 +989,6 @@ def process(igdb, folder, args):
                 console.print(f"[bold green]✔ {path.name} written[/bold green]")
         else:
             return True
-
-
-def fail(message):
-    console.print(f"[bold red]✖[/bold red] {message}", style="red")
-    sys.exit(1)
 
 
 def main():

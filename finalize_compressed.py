@@ -10,6 +10,8 @@ matching "<name>.convert.log" and "<name>.compare.log". For each one it checks:
     and, if it compared the Data Position Measurements that follow it, that
     they "match within the measurement noise"
   * if "<name>.verify.log" exists, "Total errors+unknowns" is 0
+  * "aaru image info" says the compressed image was created by CREATOR, as
+    convert.sh stamps it
 
 If everything passes, "<name>.compressed.aif" replaces "<name>.aif" and the
 auxiliary files (convert/compare/verify logs, mhddlog bin/png, verify png)
@@ -21,9 +23,13 @@ Usage: finalize_compressed.py [ROOT] [--dry-run] [--no-color]
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
+AARU = os.environ.get("AARU", "/usr/bin/aaru")
+# Must match CREATOR in convert.sh
+CREATOR = "Nat Portillo"
 SUFFIX = ".compressed.aif"
 CLEANUP_SUFFIXES = (
     ".convert.log",
@@ -113,6 +119,12 @@ def check(base: Path) -> list[str]:
             errors.append("Verify log has no 'Total errors+unknowns' line")
         elif int(matches[-1]) != 0:
             errors.append(f"Verify log reports {matches[-1]} errors+unknowns")
+
+    compressed = base.with_name(base.name + SUFFIX)
+    info = subprocess.run([AARU, "i", "info", str(compressed)],
+                          capture_output=True, text=True, errors="replace").stdout
+    if f"Created by: {CREATOR}" not in info:
+        errors.append(f"Compressed image is not created by '{CREATOR}' (not converted by convert.sh?)")
 
     return errors
 

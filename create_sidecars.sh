@@ -1,6 +1,6 @@
 #!/bin/bash
 
-AARU=/mnt/datos2/Aaru/6.0/aaru
+AARU="${AARU:-/usr/bin/aaru}"
 
 # For each .aif file in the current directory and all subdirectories that is missing
 # its .metadata.json sidecar, create it. Compressed images pending finalization are skipped,

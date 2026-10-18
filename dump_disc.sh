@@ -42,7 +42,7 @@
 #   The settings actually used are printed before the dump starts.
 #
 # Environment:
-#   AARU            aaru binary           (default /mnt/datos2/Aaru/6.0/aaru)
+#   AARU            aaru binary           (default /usr/bin/aaru)
 #   PROTECTIONSCAN  ProtectionScan binary (default /mnt/datos2/ProtectionScan/ProtectionScan)
 #
 # Examples:

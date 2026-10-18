@@ -8,7 +8,7 @@
 # With more than one job, aaru's console output is discarded so the jobs do not
 # garble each other; everything is still in the .convert.log and .compare.log.
 
-AARU=/mnt/datos2/Aaru/6.0/aaru
+AARU="${AARU:-/usr/bin/aaru}"
 CREATOR="Nat Portillo"
 JOBS="${JOBS:-4}"
 

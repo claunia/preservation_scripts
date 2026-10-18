@@ -42,7 +42,7 @@ Roughly in the order they are used:
 
 | Script | What it does |
 |---|---|
-| `make_folder_icons.py` | Creates Windows (`desktop.ini` / `desktop.ico`) and Linux (`.directory` / `.directory.png`) folder icons from the JPEG-XL scans in each folder, preferring `cover.jxl`, then `front.jxl`, `media.jxl`, `media1.jxl` and `up.jxl`. Without a `cover.jxl`, a DVD or Blu-ray sized `inlay.jxl` has its front cover cut out (not kept) and used instead, and it also replaces existing icons that were taken from an `.exe` (no PNG image in `desktop.ico`). A folder with a single scan of another name gets it renamed to `media.jxl`. |
+| `make_folder_icons.py` | Creates Windows (`desktop.ini` / `desktop.ico`) and Linux (`.directory` / `.directory.png`) folder icons from the JPEG-XL scans in each folder, preferring `cover.jxl`, then `front.jxl`, `media.jxl`, `media1.jxl` and `up.jxl`. Without a `cover.jxl`, a DVD, Blu-ray or CD-ROM (unfolded jewel case booklet) sized `inlay.jxl` has its front cover (right side) cut out (not kept) and used instead, and it also replaces existing icons that were taken from an `.exe` (no PNG image in `desktop.ico`). A folder with a single scan of another name gets it renamed to `media.jxl`. |
 | `mkpdf.sh` | Joins the given images (e.g. manual scans) into an optimized `output.pdf`, encoding each page as whichever of PNG or JPEG 2000 is smaller. |
 
 ## Archiving

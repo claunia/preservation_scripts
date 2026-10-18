@@ -3,8 +3,9 @@
 folder icons from JPEG-XL scans, for the given folder and all its subfolders.
 
 When a folder has no cover.jxl but has an inlay.jxl with the proportions of a
-DVD (273x183mm) or Blu-ray (273x148mm) inlay, its rightmost 130mm (the front
-cover) is cut out and used for the icons (it is not kept).
+DVD (273x183mm) or Blu-ray (273x148mm) inlay, or of an unfolded CD-ROM jewel
+case booklet (240x120mm), its front cover (the rightmost 130mm, or 120mm for
+CD-ROM) is cut out and used for the icons (it is not kept).
 If the folder already had icons, they are only replaced when its desktop.ico
 has no PNG (Vista) image, meaning it was taken from an .exe, not a scan."""
 
@@ -20,9 +21,8 @@ PREFERRED = ("cover.jxl", "front.jxl", "media.jxl", "media1.jxl", "up.jxl")
 KEEP_SINGLE = ("cover.jxl", "front.jxl", "media.jxl", "media1.jxl", "inlay.jxl")
 TOOLS = ("magick", "oxipng", "icotool")
 
-# Inlay width x height in mm, the front cover is the rightmost COVER_MM of it
-INLAYS = {"DVD": (273, 183), "Blu-ray": (273, 148)}
-COVER_MM = 130
+# Inlay width x height in mm and width of its front cover, the rightmost part of it
+INLAYS = {"DVD": (273, 183, 130), "Blu-ray": (273, 148, 130), "CD-ROM": (240, 120, 120)}
 RATIO_TOLERANCE = 0.05
 
 DESKTOP_INI = "[.ShellClassInfo]\nIconResource=.\\desktop.ico,0"
@@ -48,24 +48,24 @@ def image_size(path):
 
 
 def inlay_kind(width, height):
-    """Which inlay these pixel proportions match, or None."""
+    """Which inlay these pixel proportions match best, or None."""
     ratio = width / height
-    for kind, (w_mm, h_mm) in INLAYS.items():
-        if abs(ratio / (w_mm / h_mm) - 1) <= RATIO_TOLERANCE:
-            return kind
-    return None
+    errors = {kind: abs(ratio / (w_mm / h_mm) - 1) for kind, (w_mm, h_mm, _) in INLAYS.items()}
+    kind = min(errors, key=errors.get)
+    return kind if errors[kind] <= RATIO_TOLERANCE else None
 
 
 def inlay_cover_crop(inlay):
     """ImageMagick crop geometry of the front cover of an inlay, or None if
-    the inlay does not have the proportions of a DVD or Blu-ray one."""
+    the inlay does not have the proportions of a DVD, Blu-ray or CD-ROM one."""
     width, height = image_size(inlay)
     kind = inlay_kind(width, height)
     if kind is None:
         print(f"ignore: {inlay} ({width}x{height}, ratio {width / height:.2f} "
-              f"is not a DVD or Blu-ray inlay)")
+              f"is not a DVD, Blu-ray or CD-ROM inlay)")
         return None
-    crop = round(width * COVER_MM / INLAYS[kind][0])
+    w_mm, _, cover_mm = INLAYS[kind]
+    crop = round(width * cover_mm / w_mm)
     return f"{crop}x{height}+0+0"
 
 

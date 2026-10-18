@@ -30,7 +30,7 @@ Roughly in the order they are used:
 
 | Script | What it does |
 |---|---|
-| `create_sidecars.sh` | Creates the Aaru `<name>.metadata.json` sidecar for each `.aif` that has none. Folders that already have a `metadata.json` are skipped. |
+| `create_sidecars.sh` | Creates the Aaru `<name>.metadata.json` sidecar for each `.aif` that has none. Folders that already have a `metadata.json` are skipped. Runs `JOBS` (default 4) images in parallel, logging each to `<name>.sidecar.log`, kept only if it fails; `JOBS=1` runs them one by one with Aaru's progress bars. |
 | `rename_metadata.py` | Renames the single `*.metadata.json` in each folder to `metadata.json`, and lists folders where that is not possible (several sidecars, or a `metadata.json` already there). |
 | `merge_metadata.py` | Combines the discs of two or more metadata files into one multi-disc `metadata.json`, renumbering the disc sequence. |
 | `add_magazine_metadata.py` | Fills in Name (from the folder name), Publishers, Release (`Coverdisc`) and ReleaseDate (from the month in the folder name, or from the filesystem dates) in the metadata of each subfolder. Meant for magazine coverdiscs. |

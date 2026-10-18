@@ -1,15 +1,44 @@
 #!/bin/bash
 
 AARU="${AARU:-/usr/bin/aaru}"
+# Parallel jobs. Reading the LZMA compressed images is CPU bound, so a few jobs use more cores,
+# but too many make a hard disk seek between images. Each job takes up to ~900MB of memory.
+JOBS="${JOBS:-4}"
 
 # For each .aif file in the current directory and all subdirectories that is missing
 # its .metadata.json sidecar, create it. Compressed images pending finalization are skipped,
 # as are folders (and everything below them) containing a metadata.json file.
-# The file list is read from fd 3 so aaru keeps the terminal as stdin (needed for its progress bars).
-while IFS= read -r -d '' f <&3; do
-    [ -e "${f%.aif}.metadata.json" ] && continue
+# With JOBS=1 aaru keeps the terminal (for its progress bars). Otherwise the output of each
+# image goes to <image>.sidecar.log, which is removed when it succeeds.
+find_images() {
+    find . -type d -exec test -e '{}/metadata.json' \; -prune -o \
+         -type f -name '*.aif' ! -name '*.compressed.aif' -print0 | sort -z
+}
 
-    echo "$f"
-    (cd "$(dirname "$f")" && "$AARU" i create-sidecar "$(basename "$f")") || echo "FAILED: $f"
-done 3< <(find . -type d -exec test -e '{}/metadata.json' \; -prune -o \
-                -type f -name '*.aif' ! -name '*.compressed.aif' -print0 | sort -z)
+if [ "$JOBS" -le 1 ]; then
+    # The file list is read from fd 3 so aaru keeps the terminal as stdin
+    while IFS= read -r -d '' f <&3; do
+        [ -e "${f%.aif}.metadata.json" ] && continue
+
+        echo "$f"
+        (cd "$(dirname "$f")" && "$AARU" i create-sidecar "$(basename "$f")") || echo "FAILED: $f"
+    done 3< <(find_images)
+    exit
+fi
+
+sidecar() {
+    local f="$1" log="${1%.aif}.sidecar.log"
+    [ -e "${f%.aif}.metadata.json" ] && return
+
+    echo "start: $f"
+    if (cd "$(dirname "$f")" && "$AARU" i create-sidecar "$(basename "$f")") </dev/null >"$log" 2>&1; then
+        rm -f "$log"
+        echo "done: $f"
+    else
+        echo "FAILED: $f (see $log)"
+    fi
+}
+export -f sidecar
+export AARU
+
+find_images | xargs -0 -r -n 1 -P "$JOBS" bash -c 'sidecar "$1"' _

@@ -27,17 +27,21 @@ fi
 failures="$(mktemp)"
 trap 'rm -f "$failures"' EXIT
 
-# Convert and compare one image, in the current directory
+# Convert and compare one image, in the current directory.
+# With "compare" as second argument, only compares an already converted image.
 convert_image() {
-    local f="$1" path="$PWD/$1"
+    local f="$1" path="$PWD/$1" convert=1
+    [ "$2" = compare ] && convert=0
 
     if [ "$JOBS" = 1 ]; then
         echo "$path"
-        "$AARU" i --logfile "${f%.aif}.convert.log" convert --creator "$CREATOR" --generate-subchannels "$f" "${f%.aif}.compressed.aif" &&
+        { [ "$convert" = 0 ] ||
+          "$AARU" i --logfile "${f%.aif}.convert.log" convert --creator "$CREATOR" --generate-subchannels "$f" "${f%.aif}.compressed.aif"; } &&
         "$AARU" i --logfile "${f%.aif}.compare.log" compare "$f" "${f%.aif}.compressed.aif"
     else
         echo "start: $path"
-        "$AARU" i --logfile "${f%.aif}.convert.log" convert --creator "$CREATOR" --generate-subchannels "$f" "${f%.aif}.compressed.aif" >/dev/null 2>&1 &&
+        { [ "$convert" = 0 ] ||
+          "$AARU" i --logfile "${f%.aif}.convert.log" convert --creator "$CREATOR" --generate-subchannels "$f" "${f%.aif}.compressed.aif" >/dev/null 2>&1; } &&
         "$AARU" i --logfile "${f%.aif}.compare.log" compare "$f" "${f%.aif}.compressed.aif" >/dev/null 2>&1
     fi
 
@@ -54,7 +58,7 @@ queue_image() {
     while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do
         wait -n
     done
-    convert_image "$1" &
+    convert_image "$1" "$2" &
 }
 
 # Queue every .aif file in the current directory,
@@ -70,6 +74,14 @@ convert_dir() {
 
         # Already converted, pending finalization
         if [ -e "${f%.aif}.compressed.aif" ]; then
+            # Conversion finished but the compare never ran (failed or interrupted run)
+            if [ ! -e "${f%.aif}.compare.log" ] &&
+               tail -n 5 "${f%.aif}.convert.log" 2>/dev/null | grep -q "Conversion done"; then
+                echo "$f (converted but not compared, comparing)"
+                queue_image "$f" compare
+                continue
+            fi
+
             echo "$f (skipped, ${f%.aif}.compressed.aif already exists)"
             continue
         fi

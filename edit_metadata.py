@@ -736,17 +736,18 @@ def process(folder, args, vocabulary):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("folders", nargs="*", type=Path, default=[Path(".")],
-                        help="Folders with the metadata (default: the current folder)")
+    parser.add_argument("folders", nargs="*", type=Path,
+                        help="Folders with the metadata (default: the current folder, or none with --learn)")
     parser.add_argument("-r", "--subfolders", action="store_true",
                         help="Process every subfolder of the given folders")
     parser.add_argument("--learn", type=Path, metavar="FOLDER",
-                        help="First learn the keywords, categories and people used in the metadata below FOLDER")
+                        help="Learn the keywords, categories and people used in the metadata below FOLDER "
+                             "(then edit the folders given, if any)")
     parser.add_argument("-n", "--dry-run", action="store_true", help="Ask everything but do not write")
     args = parser.parse_args()
 
     folders = []
-    for folder in args.folders:
+    for folder in args.folders or ([] if args.learn else [Path(".")]):
         if not folder.is_dir():
             fail(f"{folder} is not a folder")
         folders += sorted(p for p in folder.iterdir() if p.is_dir()) if args.subfolders else [folder]

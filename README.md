@@ -22,8 +22,8 @@ Roughly in the order they are used:
 | Script | What it does |
 |---|---|
 | `check_dumps.py` | Checks every dump found below a folder and prints `DUMP OK` or `DUMP FAILURE` with the reasons. A dump is OK when the dump log reports 0 unreadable sectors, the verify log (if any) reports 0 errors+unknowns, and the resume file has no bad blocks and reached the last block. Older dump logs do not report unreadable sectors, so the resume file alone decides for them. `-f` only shows failures. |
-| `convert.sh` | Compresses every `.aif` in the subfolders (up to 3 levels deep) into `<name>.compressed.aif` and compares it with the original, skipping images that are already compressed. Runs several images at once (`-j N`, default 4). |
-| `finalize_compressed.py` | For each `<name>.compressed.aif` whose convert and compare (and verify, if present) logs show success, replaces `<name>.aif` with it and removes the logs and other leftovers of the conversion. |
+| `convert.sh` | Compresses every `.aif` in the subfolders (up to 3 levels deep) into `<name>.compressed.aif` and compares it with the original, skipping images that are already compressed. An image that was converted but never compared (no compare log) only gets the compare. Runs several images at once (`-j N`, default 4). |
+| `finalize_compressed.py` | For each `<name>.compressed.aif` whose convert and compare (and verify, if present) logs show success, and that `aaru image info` shows as created by the same creator `convert.sh` stamps, replaces `<name>.aif` with it and removes the logs and other leftovers of the conversion. |
 | `repair.sh` | One-off: upgrades the DDT of the `.aif` images in the subfolders to the AaruFormat alpha 21 layout using `aaruformattool`. |
 
 ## Metadata

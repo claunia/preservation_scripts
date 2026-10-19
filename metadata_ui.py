@@ -287,13 +287,21 @@ def image_name(media):
     return (image.get("Value") if isinstance(image, dict) else image) or ""
 
 
+def letters_code(group):
+    """Whether a group without digits is still a product code: capitals with dashes ("RVL-SOUP-EAP", "AG-RCFBS-BS")
+    or a long capitals word ("UNRETOPCBOI"), but not a region, media or tag ("EUR", "DVD-ROM", "OEM")."""
+    if re.fullmatch(r"[A-Z]+(-[A-Z]+)+", group):
+        return len(group.replace("-", "")) >= 6 and not re.search(r"-(ROM|RAM|RW|R)\b", group)
+    return bool(re.fullmatch(r"[A-Z]{8,}", group))
+
+
 def part_numbers_in(name):
     """What is in parentheses or brackets in a name and looks like a part number: it has a digit (unlike "Codegame"
-    or "PC Plus"), is not a disc number ("CD 1", "Disc 2") and is not a barcode or ISBN."""
+    or "PC Plus") or is a letters only code, is not a disc number ("CD 1", "Disc 2") and is not a barcode or ISBN."""
     found = []
     for group in re.findall(r"[(\[]([^)\]]*)[)\]]", name):
         group = group.strip()
-        if (not re.search(r"\d", group)
+        if (not (re.search(r"\d", group) or letters_code(group))
                 or re.fullmatch(r"(?i)(cd|dvd|bd|gd|disc|disco|disk|disque|cara|side)[\s-]*\w{1,2}|\d{1,2}", group)
                 or barcode_in(group)):
             continue

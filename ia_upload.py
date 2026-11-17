@@ -713,7 +713,7 @@ def process(folder, args, keys):
             console.print("[green]✔[/green] everything is already uploaded")
         total = sum(p.stat().st_size for p in todo)
         size_hint = sum(p.stat().st_size for p in files)
-        overall = progress.add_task("total", total=total)
+        overall = progress.add_task("total", total=total, visible=bool(todo))
         try:
             for i, path in enumerate(todo):
                 uploader.upload(path, i == len(todo) - 1, size_hint, overall)

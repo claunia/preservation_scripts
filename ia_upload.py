@@ -27,9 +27,9 @@ days.
 Files: every file in the folder except the folder icons (desktop.ini, desktop.ico, .directory,
 .directory.png), info.txt, PAR2 recovery files, backups (*.bak, *.tmp), *.sidecar.log and
 *.compressed.aif pending finalization.
-Before uploading, front.png is made from front.jxl, otherwise cover.png from cover.jxl, from the front
-cover of a CD, DVD or Blu-ray inlay.jxl or from the folder icon, and __ia_thumb.jpg from it, so that the
-cover is the item thumbnail. That cover.png is not uploaded, front.png is.
+Before uploading, front.png is made from front.jxl, and __ia_thumb.jpg, so that the cover is the item
+thumbnail, from front.png, otherwise from cover.jxl, the front cover of a CD, DVD or Blu-ray inlay.jxl or
+the folder icon. A cover.png made by earlier versions is removed.
 Subfolders are not uploaded.
 
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
@@ -50,7 +50,6 @@ import io
 import json
 import os
 import re
-import shutil
 import queue
 import subprocess
 import sys
@@ -294,15 +293,14 @@ def credentials(force=False):
 # ---------------------------------------------------------------- Folder, identifier and metadata
 
 
-def folder_files(folder, exclude=()):
+def folder_files(folder):
     files, skipped = [], []
-    exclude = {x.name.lower() for x in exclude}
     for p in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
         if p.is_dir():
             console.print(f"[yellow]⚠ subfolder {p.name} is not uploaded[/yellow]")
         elif not p.is_file():
             continue
-        elif p.name.lower() in SKIP_NAMES or p.name.lower() in exclude or p.name.lower().endswith(SKIP_SUFFIXES):
+        elif p.name.lower() in SKIP_NAMES or p.name.lower().endswith(SKIP_SUFFIXES):
             skipped.append(p)
         else:
             files.append(p)
@@ -314,68 +312,56 @@ def folder_files(folder, exclude=()):
     return files
 
 
-def make_cover(folder, dry_run):
-    """Create a PNG cover for the item: front.png from front.jxl, otherwise cover.png from cover.jxl, from
-    the front cover cut out of a CD, DVD or Blu-ray inlay.jxl or, without any of them, from the folder icon
-    (.directory.png), unless it is already there and up to date. Returns the cover, None if there is none."""
+def convert_image(source, target, options, what, dry_run):
+    """Write target from source with magick, unless it is already there and newer than source."""
+    if target.exists() and target.stat().st_mtime >= source.stat().st_mtime:
+        return
+    if dry_run:
+        console.print(f"[dim]dry run: would create {target.name} from {what}[/dim]")
+        return
+    tmp = target.with_name(target.name + ".tmp")
+    kind = "JPEG" if target.suffix.lower() == ".jpg" else "PNG"
+    try:
+        subprocess.run(("magick", str(source), *options, f"{kind}:{tmp}"), check=True, capture_output=True)
+        tmp.replace(target)
+    except (OSError, subprocess.CalledProcessError) as e:
+        tmp.unlink(missing_ok=True)
+        detail = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else e
+        console.print(f"[yellow]⚠ cannot create {target.name} from {what}: {detail}[/yellow]")
+        return
+    console.print(f"[green]✔[/green] created {target.name} from {what}")
+
+
+def make_covers(folder, dry_run):
+    """Create front.png from front.jxl, and __ia_thumb.jpg, which archive.org uses as the item thumbnail
+    instead of picking one of the images itself (often a .graph.png), from front.png, otherwise from
+    cover.jxl, the front cover cut out of a CD, DVD or Blu-ray inlay.jxl or the folder icon (.directory.png).
+    A cover.png left by earlier versions, made from one of those, is removed."""
     by_name = {p.name.lower(): p for p in folder.iterdir() if p.is_file()}
     crop = None
     if "front.jxl" in by_name:
-        source, cover_name = by_name["front.jxl"], "front.png"
+        front = by_name.get("front.png") or folder / "front.png"
+        convert_image(by_name["front.jxl"], front, (), "front.jxl", dry_run)
+        source = front if front.exists() else by_name["front.jxl"]
     elif "cover.jxl" in by_name:
-        source, cover_name = by_name["cover.jxl"], "cover.png"
+        source = by_name["cover.jxl"]
     elif "inlay.jxl" in by_name and (crop := inlay_cover_crop(by_name["inlay.jxl"])):
-        source, cover_name = by_name["inlay.jxl"], "cover.png"
+        source = by_name["inlay.jxl"]
     elif ".directory.png" in by_name:
-        source, cover_name = by_name[".directory.png"], "cover.png"
+        source = by_name[".directory.png"]
     else:
-        return None
-    what = f"the front cover of {source.name}" if crop else source.name
-    cover = by_name.get(cover_name) or folder / cover_name
-    if cover.exists() and cover.stat().st_mtime >= source.stat().st_mtime:
-        return cover
-    if dry_run:
-        console.print(f"[dim]dry run: would create {cover.name} from {what}[/dim]")
-        return cover
-    tmp = cover.with_name(cover.name + ".tmp")
-    try:
-        if crop:
-            subprocess.run(("magick", str(source), "-gravity", "East", "-crop", crop, "+repage", f"PNG:{tmp}"),
-                           check=True, capture_output=True)
-        elif source.suffix.lower() == ".jxl":
-            subprocess.run(("magick", str(source), f"PNG:{tmp}"), check=True, capture_output=True)
+        return
+    old = by_name.get("cover.png")
+    if old and source.name.lower() != "front.png" and old.stat().st_mtime >= source.stat().st_mtime:
+        if dry_run:
+            console.print(f"[dim]dry run: would remove {old.name}, made from {source.name}[/dim]")
         else:
-            shutil.copyfile(source, tmp)
-        tmp.replace(cover)
-    except (OSError, subprocess.CalledProcessError) as e:
-        tmp.unlink(missing_ok=True)
-        detail = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else e
-        console.print(f"[yellow]⚠ cannot create {cover.name} from {what}: {detail}[/yellow]")
-        return cover if cover.exists() else None
-    console.print(f"[green]✔[/green] created {cover.name} from {what}")
-    return cover
-
-
-def make_thumbnail(folder, cover, dry_run):
-    """Create __ia_thumb.jpg from the cover, which archive.org then uses as the item thumbnail instead of
-    picking one of the images itself (often a .graph.png), unless it is already there and up to date."""
-    thumb = folder / THUMBNAIL
-    if cover is None or (thumb.exists() and cover.exists() and thumb.stat().st_mtime >= cover.stat().st_mtime):
-        return
-    if dry_run:
-        console.print(f"[dim]dry run: would create {THUMBNAIL} from {cover.name}[/dim]")
-        return
-    tmp = thumb.with_name(thumb.name + ".tmp")
-    try:
-        subprocess.run(("magick", str(cover), "-flatten", "-resize", "600x600>", "-quality", "90",
-                        f"JPEG:{tmp}"), check=True, capture_output=True)
-        tmp.replace(thumb)
-    except (OSError, subprocess.CalledProcessError) as e:
-        tmp.unlink(missing_ok=True)
-        detail = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else e
-        console.print(f"[yellow]⚠ cannot create {THUMBNAIL} from {cover.name}: {detail}[/yellow]")
-        return
-    console.print(f"[green]✔[/green] created {THUMBNAIL} from {cover.name}")
+            old.unlink()
+            console.print(f"[green]✔[/green] removed {old.name}, made from {source.name}")
+    options = ("-gravity", "East", "-crop", crop, "+repage") if crop else ()
+    what = f"the front cover of {source.name}" if crop else source.name
+    convert_image(source, folder / THUMBNAIL, (*options, "-flatten", "-resize", "600x600>", "-quality", "90"),
+                  what, dry_run)
 
 
 def make_identifier(name):
@@ -891,10 +877,8 @@ def remote_files(identifier):
 
 def process(folder, args, keys):
     console.rule(f"[bold]{folder.resolve().name}")
-    cover = make_cover(folder, args.dry_run)
-    make_thumbnail(folder, cover, args.dry_run)
-    # A cover.png made from another image is only used for the thumbnail, front.png is uploaded
-    files = folder_files(folder, [cover] if cover and cover.name.lower() == "cover.png" else [])
+    make_covers(folder, args.dry_run)
+    files = folder_files(folder)
     if not files:
         console.print("[yellow]⚠ nothing to upload[/yellow]")
         return True

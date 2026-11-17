@@ -714,9 +714,10 @@ class Uploader:
             entry = self.entry(path)
             if entry.get("done"):
                 continue
-            on_item = remote.get(path.name)
-            if on_item and int(on_item.get("size", -1)) == entry["size"] \
-                    and on_item.get("md5") == file_md5(path, entry):
+            # archive.org renames an uploaded __ia_thumb.jpg to ___ia_thumb.jpg and makes its own from it
+            names = (path.name, "_" + path.name) if path.name == THUMBNAIL else (path.name,)
+            if any(int(remote[name].get("size", -1)) == entry["size"] and remote[name].get("md5") == file_md5(path, entry)
+                   for name in names if name in remote):
                 entry["done"] = True
                 continue
             todo.append(path)

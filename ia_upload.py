@@ -27,6 +27,9 @@ days.
 Files: every file in the folder except the folder icons (desktop.ini, desktop.ico, .directory,
 .directory.png), info.txt, PAR2 recovery files, backups (*.bak, *.tmp), *.sidecar.log and
 *.compressed.aif pending finalization.
+Before uploading, front.png is made from front.jxl, otherwise cover.png from cover.jxl, from the front
+cover of a CD, DVD or Blu-ray inlay.jxl or from the folder icon, and __ia_thumb.jpg from it, so that the
+cover is the item thumbnail.
 Subfolders are not uploaded.
 
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
@@ -71,6 +74,7 @@ STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "stat
 
 SKIP_NAMES = {"desktop.ini", "desktop.ico", ".directory", ".directory.png", "info.txt"}
 SKIP_SUFFIXES = (".bak", ".tmp", ".sidecar.log", ".compressed.aif", ".par2")
+THUMBNAIL = "__ia_thumb.jpg"
 MAX_PARTS = 10000
 RETRIES = 10
 
@@ -269,7 +273,7 @@ def folder_files(folder):
 def make_cover(folder, dry_run):
     """Create a PNG cover for the item: front.png from front.jxl, otherwise cover.png from cover.jxl, from
     the front cover cut out of a CD, DVD or Blu-ray inlay.jxl or, without any of them, from the folder icon
-    (.directory.png), unless it is already there and up to date."""
+    (.directory.png), unless it is already there and up to date. Returns the cover, None if there is none."""
     by_name = {p.name.lower(): p for p in folder.iterdir() if p.is_file()}
     crop = None
     if "front.jxl" in by_name:
@@ -281,14 +285,14 @@ def make_cover(folder, dry_run):
     elif ".directory.png" in by_name:
         source, cover_name = by_name[".directory.png"], "cover.png"
     else:
-        return
+        return None
     what = f"the front cover of {source.name}" if crop else source.name
     cover = by_name.get(cover_name) or folder / cover_name
     if cover.exists() and cover.stat().st_mtime >= source.stat().st_mtime:
-        return
+        return cover
     if dry_run:
         console.print(f"[dim]dry run: would create {cover.name} from {what}[/dim]")
-        return
+        return cover
     tmp = cover.with_name(cover.name + ".tmp")
     try:
         if crop:
@@ -303,8 +307,31 @@ def make_cover(folder, dry_run):
         tmp.unlink(missing_ok=True)
         detail = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else e
         console.print(f"[yellow]⚠ cannot create {cover.name} from {what}: {detail}[/yellow]")
-        return
+        return cover if cover.exists() else None
     console.print(f"[green]✔[/green] created {cover.name} from {what}")
+    return cover
+
+
+def make_thumbnail(folder, cover, dry_run):
+    """Create __ia_thumb.jpg from the cover, which archive.org then uses as the item thumbnail instead of
+    picking one of the images itself (often a .graph.png), unless it is already there and up to date."""
+    thumb = folder / THUMBNAIL
+    if cover is None or (thumb.exists() and cover.exists() and thumb.stat().st_mtime >= cover.stat().st_mtime):
+        return
+    if dry_run:
+        console.print(f"[dim]dry run: would create {THUMBNAIL} from {cover.name}[/dim]")
+        return
+    tmp = thumb.with_name(thumb.name + ".tmp")
+    try:
+        subprocess.run(("magick", str(cover), "-flatten", "-resize", "600x600>", "-quality", "90",
+                        f"JPEG:{tmp}"), check=True, capture_output=True)
+        tmp.replace(thumb)
+    except (OSError, subprocess.CalledProcessError) as e:
+        tmp.unlink(missing_ok=True)
+        detail = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else e
+        console.print(f"[yellow]⚠ cannot create {THUMBNAIL} from {cover.name}: {detail}[/yellow]")
+        return
+    console.print(f"[green]✔[/green] created {THUMBNAIL} from {cover.name}")
 
 
 def make_identifier(name):
@@ -720,7 +747,7 @@ def remote_files(identifier):
 
 def process(folder, args, keys):
     console.rule(f"[bold]{folder.resolve().name}")
-    make_cover(folder, args.dry_run)
+    make_thumbnail(folder, make_cover(folder, args.dry_run), args.dry_run)
     files = folder_files(folder)
     if not files:
         console.print("[yellow]⚠ nothing to upload[/yellow]")

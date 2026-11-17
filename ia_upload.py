@@ -35,7 +35,8 @@ Subfolders are not uploaded.
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
 recorded in ~/.local/state/ia_upload/<identifier>.json, so after an interruption (Ctrl+C, network errors)
 running the script again continues where it stopped, also inside a file. Files already on the item with the
-same size and MD5 are skipped.
+same size and MD5 are skipped. On an item that already existed, the metadata is then updated to the one
+reviewed (except the collection).
 
 Speed: archive.org is often slow on each connection, so --jobs (default 4) files, or parts of a big file,
 are sent at once, each over its own connection. The memory used is up to --jobs times --part-size."""
@@ -599,6 +600,47 @@ def meta_headers(md, size_hint):
     return headers
 
 
+def as_list(value):
+    values = value if isinstance(value, list) else [value]
+    return [str(v).strip() for v in values if str(v).strip()]
+
+
+def metadata_changes(identifier, md):
+    """JSON Patch turning the metadata of the item into md, for the fields md has. The collection is left
+    alone: moving an item to another collection needs its curators."""
+    remote = (get_json(f"{ARCHIVE}/metadata/{identifier}").get("metadata") or {})
+    patch = []
+    for key, value in md.items():
+        if key == "collection" or as_list(remote.get(key, [])) == as_list(value):
+            continue
+        path = "/" + key.replace("~", "~0").replace("/", "~1")
+        patch.append({"op": "replace" if key in remote else "add", "path": path, "value": value})
+    return patch
+
+
+def update_metadata(identifier, keys, md, dry_run):
+    """Bring the metadata of an existing item up to date with md."""
+    patch = metadata_changes(identifier, md)
+    if not patch:
+        console.print("[green]✔[/green] the metadata is up to date")
+        return
+    fields = ", ".join(op["path"][1:] for op in patch)
+    if dry_run:
+        console.print(f"[dim]dry run: would update the metadata: {fields}[/dim]")
+        return
+    data = urllib.parse.urlencode({"-target": "metadata", "-patch": json.dumps(patch)}).encode()
+    headers = dict(auth_header(keys))
+    headers["Content-Type"] = "application/x-www-form-urlencoded"
+    _, _, body = request("POST", f"{ARCHIVE}/metadata/{identifier}", headers, data, ok=(200, 400))
+    try:
+        reply = json.loads(body or b"{}")
+    except ValueError:
+        reply = {}
+    if not reply.get("success"):
+        raise IAError(f"cannot update the metadata: {reply.get('error') or body[:200].decode(errors='replace')}")
+    console.print(f"[green]✔[/green] updated the metadata: {fields}")
+
+
 def file_md5(path, entry):
     stat = path.stat()
     if entry.get("md5") and entry.get("md5_of") == [stat.st_size, stat.st_mtime_ns]:
@@ -858,6 +900,8 @@ def process(folder, args, keys):
         show_metadata(identifier, md, files)
         console.print(f"[dim]dry run: would upload to {ARCHIVE}/details/{identifier}"
                       f"{' (existing item)' if exists else ''}[/dim]")
+        if exists:
+            update_metadata(identifier, keys, md, True)
         return True
     if not args.yes:
         reviewed = review(identifier, md, files)
@@ -884,6 +928,9 @@ def process(folder, args, keys):
             uploader.stop.set()
             uploader.save()
             raise
+    if exists:
+        # The metadata sent with the files only counts when they create the item
+        update_metadata(identifier, keys, md, False)
     console.print(f"[green]✔[/green] {ARCHIVE}/details/{identifier}")
     return True
 

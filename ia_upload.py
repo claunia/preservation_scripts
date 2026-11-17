@@ -38,6 +38,9 @@ running the script again continues where it stopped, also inside a file. Files a
 same size and MD5 are skipped. On an item that already existed, the metadata is then updated to the one
 reviewed (except the collection).
 
+When archive.org asks to slow down (too many tasks queued for the item or the account), all the uploads
+pause together, longer each time (30 s, 1 min, 2 min... up to 15 min), and go on by themselves.
+
 Speed: archive.org is often slow on each connection, so --jobs (default 4) files, or parts of a big file,
 are sent at once, each over its own connection. The memory used is up to --jobs times --part-size."""
 
@@ -51,6 +54,7 @@ import json
 import os
 import re
 import queue
+import random
 import subprocess
 import sys
 import threading
@@ -111,10 +115,46 @@ class Body(io.RawIOBase):
         return chunk
 
 
+class Throttle:
+    """Pause shared by all the uploads when archive.org asks to slow down (too many tasks queued for the
+    item or the account): they all wait, longer each time it happens again, instead of retrying together."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.until = 0.0
+        self.level = 0
+
+    def wait(self):
+        while (remaining := self.until - time.monotonic()) > 0:
+            time.sleep(min(remaining, 5))
+
+    def slow_down(self, wait=None):
+        with self.lock:
+            if time.monotonic() < self.until:
+                return  # already paused by another upload
+            self.level += 1
+            delay = int(wait) if wait and wait.isdigit() else min(900, 30 * 2 ** (self.level - 1))
+            delay = round(delay * random.uniform(1, 1.25))
+            self.until = time.monotonic() + delay
+        console.print(f"[yellow]⚠ archive.org asks to slow down (too many tasks queued), pausing the uploads "
+                      f"{delay} s[/yellow]")
+
+    def success(self):
+        if self.level:
+            with self.lock:
+                self.level = max(0, self.level - 1)
+
+
+THROTTLE = Throttle()
+
+
 def request(method, url, headers=None, data=None, sent=None, ok=(200,)):
     """Send a request, retrying on server overload and network errors. Returns (status, headers, body).
-    sent(n) is called as the body goes out, with a negative n to undo an attempt that failed."""
-    for attempt in range(RETRIES):
+    sent(n) is called as the body goes out, with a negative n to undo an attempt that failed. Requests to
+    slow down pause all of them (see Throttle) and do not count as failed attempts."""
+    attempt = 0
+    while attempt < RETRIES:
+        THROTTLE.wait()
         body = None
         progress = [0]
 
@@ -131,11 +171,18 @@ def request(method, url, headers=None, data=None, sent=None, ok=(200,)):
         wait = None
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
-                return resp.status, resp.headers, resp.read()
+                reply = resp.status, resp.headers, resp.read()
+            THROTTLE.success()
+            return reply
         except urllib.error.HTTPError as e:
             text = e.read().decode("utf-8", "replace")
             if e.code in ok:
                 return e.code, e.headers, text.encode()
+            if e.code in (429, 503) and ("slowdown" in text.lower() or "reduce your request rate" in text.lower()):
+                if sent and progress[0]:
+                    sent(-progress[0])
+                THROTTLE.slow_down(e.headers.get("Retry-After"))
+                continue
             if e.code not in (408, 429, 500, 502, 503, 504):
                 raise IAError(f"{method} {url}: HTTP {e.code} {s3_message(text) or e.reason}") from None
             wait = e.headers.get("Retry-After")
@@ -145,7 +192,8 @@ def request(method, url, headers=None, data=None, sent=None, ok=(200,)):
         if sent and progress[0]:
             sent(-progress[0])
         delay = int(wait) if wait and wait.isdigit() else min(300, 5 * 2 ** attempt)
-        console.print(f"[yellow]⚠ {problem}, retrying in {delay} s ({attempt + 1}/{RETRIES})[/yellow]")
+        attempt += 1
+        console.print(f"[yellow]⚠ {problem}, retrying in {delay} s ({attempt}/{RETRIES})[/yellow]")
         time.sleep(delay)
     raise IAError(f"{method} {url}: gave up after {RETRIES} attempts")
 

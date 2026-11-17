@@ -25,7 +25,8 @@ number, ring codes, checksums, drive used). Audio CDs go to opensource_audio (au
 days.
 
 Files: every file in the folder except the folder icons (desktop.ini, desktop.ico, .directory,
-.directory.png), backups (*.bak, *.tmp), *.sidecar.log and *.compressed.aif pending finalization.
+.directory.png), info.txt, backups (*.bak, *.tmp), *.sidecar.log and *.compressed.aif pending
+finalization.
 Subfolders are not uploaded.
 
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
@@ -68,7 +69,7 @@ CREDENTIALS = CONFIG_DIR / "credentials.json"
 IA_INI = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ia.ini"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "ia_upload"
 
-SKIP_NAMES = {"desktop.ini", "desktop.ico", ".directory", ".directory.png"}
+SKIP_NAMES = {"desktop.ini", "desktop.ico", ".directory", ".directory.png", "info.txt"}
 SKIP_SUFFIXES = (".bak", ".tmp", ".sidecar.log", ".compressed.aif")
 MAX_PARTS = 10000
 RETRIES = 10
@@ -253,7 +254,7 @@ def folder_files(folder):
             console.print(f"[yellow]⚠ subfolder {p.name} is not uploaded[/yellow]")
         elif not p.is_file():
             continue
-        elif p.name in SKIP_NAMES or p.name.lower().endswith(SKIP_SUFFIXES):
+        elif p.name.lower() in SKIP_NAMES or p.name.lower().endswith(SKIP_SUFFIXES):
             skipped.append(p)
         else:
             files.append(p)

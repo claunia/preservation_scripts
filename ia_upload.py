@@ -35,7 +35,10 @@ Subfolders are not uploaded.
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
 recorded in ~/.local/state/ia_upload/<identifier>.json, so after an interruption (Ctrl+C, network errors)
 running the script again continues where it stopped, also inside a file. Files already on the item with the
-same size and MD5 are skipped."""
+same size and MD5 are skipped.
+
+Speed: archive.org is often slow on each connection, so --jobs (default 4) files, or parts of a big file,
+are sent at once, each over its own connection. The memory used is up to --jobs times --part-size."""
 
 import argparse
 import configparser
@@ -47,8 +50,10 @@ import json
 import os
 import re
 import shutil
+import queue
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -148,6 +153,43 @@ def request(method, url, headers=None, data=None, sent=None, ok=(200,)):
 def s3_message(text):
     match = re.search(r"<Message>(.*?)</Message>", text or "", re.S)
     return match.group(1).strip() if match else ""
+
+
+def run_parallel(jobs, tasks, stop):
+    """Run the callables in tasks with up to jobs threads, stopping at the first error, which is raised
+    again. The threads are daemons, so Ctrl+C does not have to wait for the uploads in progress."""
+    tasks = list(tasks)
+    if jobs <= 1 or len(tasks) <= 1:
+        for task in tasks:
+            if stop.is_set():
+                raise IAError("stopped")
+            task()
+        return
+    todo, errors = queue.Queue(), []
+    for task in tasks:
+        todo.put(task)
+
+    def worker():
+        while not stop.is_set() and not errors:
+            try:
+                task = todo.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                task()
+            except BaseException as e:  # noqa: BLE001 - raised again in the main thread
+                errors.append(e)
+
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(min(jobs, len(tasks)))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        while thread.is_alive():
+            thread.join(0.5)
+    if errors:
+        raise errors[0]
+    if stop.is_set():
+        raise IAError("stopped")
 
 
 def get_json(url, headers=None):
@@ -569,8 +611,13 @@ def file_md5(path, entry):
 
 
 class Uploader:
-    def __init__(self, identifier, keys, md, part_size, derive, progress):
+    def __init__(self, identifier, keys, md, part_size, derive, progress, jobs):
         self.identifier = identifier
+        self.jobs = jobs
+        # At most jobs requests sending data at once, whether parts of one file or several files
+        self.slots = threading.BoundedSemaphore(jobs)
+        self.lock = threading.RLock()
+        self.stop = threading.Event()
         self.auth = auth_header(keys)
         self.access = keys["access"]
         self.md = md
@@ -585,10 +632,11 @@ class Uploader:
         self.state.setdefault("files", {})
 
     def save(self):
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = self.state_path.with_name(self.state_path.name + ".tmp")
-        tmp.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
-        tmp.replace(self.state_path)
+        with self.lock:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = self.state_path.with_name(self.state_path.name + ".tmp")
+            tmp.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
+            tmp.replace(self.state_path)
 
     def url(self, path, query=""):
         return f"{S3}/{self.identifier}/{urllib.parse.quote(path.name, safe='')}{query}"
@@ -596,11 +644,12 @@ class Uploader:
     def entry(self, path):
         """State of a file, started again if the file changed since."""
         stat = path.stat()
-        entry = self.state["files"].get(path.name)
-        if not entry or entry.get("size") != stat.st_size or entry.get("mtime") != stat.st_mtime_ns:
-            entry = {"size": stat.st_size, "mtime": stat.st_mtime_ns}
-            self.state["files"][path.name] = entry
-        return entry
+        with self.lock:
+            entry = self.state["files"].get(path.name)
+            if not entry or entry.get("size") != stat.st_size or entry.get("mtime") != stat.st_mtime_ns:
+                entry = {"size": stat.st_size, "mtime": stat.st_mtime_ns}
+                self.state["files"][path.name] = entry
+            return entry
 
     def wait_for_slot(self):
         """Wait while archive.org asks uploaders to slow down."""
@@ -637,6 +686,19 @@ class Uploader:
         headers["x-archive-queue-derive"] = "1" if self.derive and last else "0"
         return headers
 
+    def upload_all(self, todo, size_hint, overall):
+        """Upload the files, the first one alone (it creates the item) and the last one (it starts the
+        derive) once all the others are there; the rest, and the parts of big files, jobs at a time."""
+        def one(path, last=False):
+            return lambda: (self.upload(path, last, size_hint, overall),
+                            self.progress.console.print(f"[green]✔[/green] {path.name}"))
+
+        if todo:
+            one(todo[0], len(todo) == 1)()
+        run_parallel(self.jobs, [one(path) for path in todo[1:-1]], self.stop)
+        if len(todo) > 1:
+            one(todo[-1], True)()
+
     def upload(self, path, last, size_hint, overall):
         entry = self.entry(path)
         task = self.progress.add_task(path.name, total=entry["size"])
@@ -653,15 +715,19 @@ class Uploader:
                 self.multipart(path, entry, self.headers(path, last, size_hint), sent)
         finally:
             self.progress.remove_task(task)
-        entry["done"] = True
-        entry.pop("upload_id", None)
-        entry.pop("parts", None)
-        self.save()
+        with self.lock:
+            entry["done"] = True
+            entry.pop("upload_id", None)
+            entry.pop("parts", None)
+            self.save()
 
     def single(self, path, entry, headers, sent):
-        data = path.read_bytes()
-        headers["Content-MD5"] = base64.b64encode(hashlib.md5(data).digest()).decode()
-        request("PUT", self.url(path), headers, data, sent)
+        with self.slots:
+            if self.stop.is_set():
+                raise IAError("stopped")
+            data = path.read_bytes()
+            headers["Content-MD5"] = base64.b64encode(hashlib.md5(data).digest()).decode()
+            request("PUT", self.url(path), headers, data, sent)
 
     def multipart(self, path, entry, headers, sent):
         part_size = max(self.part_size, -(-entry["size"] // MAX_PARTS))
@@ -683,20 +749,32 @@ class Uploader:
         parts = entry["parts"]
         count = -(-entry["size"] // part_size)
         query = urllib.parse.quote(entry["upload_id"], safe="")
-        with open(path, "rb") as f:
-            for number in range(1, count + 1):
-                length = min(part_size, entry["size"] - (number - 1) * part_size)
-                if str(number) in parts:
-                    sent(length)
-                    continue
-                f.seek((number - 1) * part_size)
-                data = f.read(length)
+
+        def send(number, length):
+            with self.slots:
+                if self.stop.is_set():
+                    raise IAError("stopped")
+                with open(path, "rb") as f:
+                    f.seek((number - 1) * part_size)
+                    data = f.read(length)
+                digest = hashlib.md5(data).digest()
                 part_headers = dict(self.auth)
-                part_headers["Content-MD5"] = base64.b64encode(hashlib.md5(data).digest()).decode()
+                part_headers["Content-MD5"] = base64.b64encode(digest).decode()
                 _, reply, _ = request("PUT", self.url(path, f"?partNumber={number}&uploadId={query}"),
                                       part_headers, data, sent)
-                parts[str(number)] = reply.get("ETag") or f'"{hashlib.md5(data).hexdigest()}"'
+                del data
+            with self.lock:
+                parts[str(number)] = reply.get("ETag") or f'"{digest.hex()}"'
                 self.save()
+
+        tasks = []
+        for number in range(1, count + 1):
+            length = min(part_size, entry["size"] - (number - 1) * part_size)
+            if str(number) in parts:
+                sent(length)
+            else:
+                tasks.append(lambda number=number, length=length: send(number, length))
+        run_parallel(self.jobs, tasks, self.stop)
         xml = "<CompleteMultipartUpload>" + "".join(
             f"<Part><PartNumber>{n}</PartNumber><ETag>{parts[str(n)]}</ETag></Part>"
             for n in range(1, count + 1)) + "</CompleteMultipartUpload>"
@@ -719,7 +797,7 @@ class Uploader:
             if status == 404:
                 return None
             root = ET.fromstring(body)
-            for part in root.iter("{*}Part"):
+            for part in root.findall(".//{*}Part"):
                 parts[part.findtext("{*}PartNumber")] = part.findtext("{*}ETag")
             if root.findtext("{*}IsTruncated") != "true":
                 return parts
@@ -789,7 +867,8 @@ def process(folder, args, keys):
     columns = (TextColumn("{task.description}", markup=False), BarColumn(), DownloadColumn(),
                TransferSpeedColumn(), TimeRemainingColumn())
     with Progress(*columns, console=console) as progress:
-        uploader = Uploader(identifier, keys, md, args.part_size * 1024 * 1024, not args.no_derive, progress)
+        uploader = Uploader(identifier, keys, md, args.part_size * 1024 * 1024, not args.no_derive, progress,
+                            args.jobs)
         todo = uploader.pending(files, remote_files(identifier) if exists else {})
         if not todo:
             console.print("[green]✔[/green] everything is already uploaded")
@@ -797,10 +876,9 @@ def process(folder, args, keys):
         size_hint = sum(p.stat().st_size for p in files)
         overall = progress.add_task("total", total=total, visible=bool(todo))
         try:
-            for i, path in enumerate(todo):
-                uploader.upload(path, i == len(todo) - 1, size_hint, overall)
-                progress.console.print(f"[green]✔[/green] {path.name}")
+            uploader.upload_all(todo, size_hint, overall)
         except KeyboardInterrupt:
+            uploader.stop.set()
             uploader.save()
             raise
     console.print(f"[green]✔[/green] {ARCHIVE}/details/{identifier}")
@@ -820,9 +898,13 @@ def main():
     parser.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     parser.add_argument("--part-size", type=int, default=100, metavar="MiB",
                         help="files bigger than this are sent in parts of this size (default 100)")
+    parser.add_argument("-j", "--jobs", type=int, default=4, metavar="N",
+                        help="files or parts of a file sent at once, each over its own connection (default 4)")
     parser.add_argument("--no-derive", action="store_true", help="do not let archive.org derive the item")
     args = parser.parse_args()
 
+    if args.jobs < 1:
+        parser.error("--jobs must be at least 1")
     if args.part_size < 5:
         parser.error("--part-size must be at least 5 MiB")
     if args.identifier and len(args.folders) > 1:

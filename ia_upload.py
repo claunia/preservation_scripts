@@ -42,6 +42,8 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import unicodedata
@@ -54,6 +56,7 @@ from pathlib import Path
 from metadata_ui import (Quit, ask, confirm, console, fail, human_size, image_name, load, media_list,
                          metadata_files, unique)
 
+from make_folder_icons import inlay_cover_crop
 from rich.progress import (BarColumn, DownloadColumn, Progress, TextColumn, TimeRemainingColumn,
                            TransferSpeedColumn)
 from rich.table import Table
@@ -260,6 +263,47 @@ def folder_files(folder):
     # derived once, when everything is there
     files.sort(key=lambda p: (p.name == "metadata.json", p.stat().st_size > 64 * 1024 * 1024, p.name.lower()))
     return files
+
+
+def make_cover(folder, dry_run):
+    """Create a PNG cover for the item: front.png from front.jxl, otherwise cover.png from cover.jxl, from
+    the front cover cut out of a CD, DVD or Blu-ray inlay.jxl or, without any of them, from the folder icon
+    (.directory.png), unless it is already there and up to date."""
+    by_name = {p.name.lower(): p for p in folder.iterdir() if p.is_file()}
+    crop = None
+    if "front.jxl" in by_name:
+        source, cover_name = by_name["front.jxl"], "front.png"
+    elif "cover.jxl" in by_name:
+        source, cover_name = by_name["cover.jxl"], "cover.png"
+    elif "inlay.jxl" in by_name and (crop := inlay_cover_crop(by_name["inlay.jxl"])):
+        source, cover_name = by_name["inlay.jxl"], "cover.png"
+    elif ".directory.png" in by_name:
+        source, cover_name = by_name[".directory.png"], "cover.png"
+    else:
+        return
+    what = f"the front cover of {source.name}" if crop else source.name
+    cover = by_name.get(cover_name) or folder / cover_name
+    if cover.exists() and cover.stat().st_mtime >= source.stat().st_mtime:
+        return
+    if dry_run:
+        console.print(f"[dim]dry run: would create {cover.name} from {what}[/dim]")
+        return
+    tmp = cover.with_name(cover.name + ".tmp")
+    try:
+        if crop:
+            subprocess.run(("magick", str(source), "-gravity", "East", "-crop", crop, "+repage", f"PNG:{tmp}"),
+                           check=True, capture_output=True)
+        elif source.suffix.lower() == ".jxl":
+            subprocess.run(("magick", str(source), f"PNG:{tmp}"), check=True, capture_output=True)
+        else:
+            shutil.copyfile(source, tmp)
+        tmp.replace(cover)
+    except (OSError, subprocess.CalledProcessError) as e:
+        tmp.unlink(missing_ok=True)
+        detail = e.stderr.decode(errors="replace").strip() if isinstance(e, subprocess.CalledProcessError) else e
+        console.print(f"[yellow]⚠ cannot create {cover.name} from {what}: {detail}[/yellow]")
+        return
+    console.print(f"[green]✔[/green] created {cover.name} from {what}")
 
 
 def make_identifier(name):
@@ -675,6 +719,7 @@ def remote_files(identifier):
 
 def process(folder, args, keys):
     console.rule(f"[bold]{folder.resolve().name}")
+    make_cover(folder, args.dry_run)
     files = folder_files(folder)
     if not files:
         console.print("[yellow]⚠ nothing to upload[/yellow]")

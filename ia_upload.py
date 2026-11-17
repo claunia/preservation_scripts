@@ -19,7 +19,7 @@ Metadata: metadata.json in the folder, otherwise its *.metadata.json sidecars, i
 Developers/Authors/Performers to creator, Publishers to publisher, ReleaseDate to date, Languages to
 language, Keywords/Categories/Subcategories/Systems/required operating systems to subject, plus version,
 release type, part and serial numbers and barcodes, and a description listing each disc (type, size, part
-number, ring codes, checksums, drive used). Audio CDs go to opensource_audio (audio), folders under
+number, ring codes, track checksums, drive used). Audio CDs go to opensource_audio (audio), folders under
 "Movies..." to opensource_movies (movies), anything else to open_source_software (software), unless
 --collection/--mediatype are given. --test uploads to test_collection, which archive.org removes after 30
 days.
@@ -390,6 +390,9 @@ def aaru_metadata(folder):
     return top, media
 
 
+TRACK_CHECKSUMS = (("CRC32", "CRC32"), ("MD5", "Md5"), ("SHA-1", "Sha1"))
+
+
 def checksum(media, kind):
     return next((c.get("Value") for c in media.get("Checksums") or [] if c.get("Type") == kind), "")
 
@@ -413,9 +416,15 @@ def disc_description(media, number, total):
         values = texts(media.get(key))
         if values:
             lines.append(f"{label}: {'; '.join(values)}")
-    for kind in ("Md5", "Sha1"):
-        if checksum(media, kind):
-            lines.append(f"{kind.upper().replace('SHA1', 'SHA-1')}: {checksum(media, kind)}")
+    # The checksums of the tracks, not of the image: they only depend on the contents of the disc, so they
+    # can be compared with other dumps of it
+    for track in media.get("Track") or []:
+        sums = ", ".join(f"{label} {checksum(track, kind)}" for label, kind in TRACK_CHECKSUMS
+                         if checksum(track, kind))
+        if sums:
+            number = (track.get("Sequence") or {}).get("Number")
+            about = ", ".join(x for x in (track.get("Type"), human_size(track.get("Size"))) if x)
+            lines.append(f"Track {number if number is not None else '?'}{' (' + about + ')' if about else ''}: {sums}")
     dumped = []
     for hw in media.get("DumpHardware") or []:
         drive = " ".join(x for x in (hw.get("Manufacturer"), hw.get("Model"), hw.get("Firmware")) if x)

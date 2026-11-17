@@ -29,7 +29,7 @@ Files: every file in the folder except the folder icons (desktop.ini, desktop.ic
 *.compressed.aif pending finalization.
 Before uploading, front.png is made from front.jxl, otherwise cover.png from cover.jxl, from the front
 cover of a CD, DVD or Blu-ray inlay.jxl or from the folder icon, and __ia_thumb.jpg from it, so that the
-cover is the item thumbnail.
+cover is the item thumbnail. That cover.png is not uploaded, front.png is.
 Subfolders are not uploaded.
 
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
@@ -293,14 +293,15 @@ def credentials(force=False):
 # ---------------------------------------------------------------- Folder, identifier and metadata
 
 
-def folder_files(folder):
+def folder_files(folder, exclude=()):
     files, skipped = [], []
+    exclude = {x.name.lower() for x in exclude}
     for p in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
         if p.is_dir():
             console.print(f"[yellow]⚠ subfolder {p.name} is not uploaded[/yellow]")
         elif not p.is_file():
             continue
-        elif p.name.lower() in SKIP_NAMES or p.name.lower().endswith(SKIP_SUFFIXES):
+        elif p.name.lower() in SKIP_NAMES or p.name.lower() in exclude or p.name.lower().endswith(SKIP_SUFFIXES):
             skipped.append(p)
         else:
             files.append(p)
@@ -834,8 +835,10 @@ def remote_files(identifier):
 
 def process(folder, args, keys):
     console.rule(f"[bold]{folder.resolve().name}")
-    make_thumbnail(folder, make_cover(folder, args.dry_run), args.dry_run)
-    files = folder_files(folder)
+    cover = make_cover(folder, args.dry_run)
+    make_thumbnail(folder, cover, args.dry_run)
+    # A cover.png made from another image is only used for the thumbnail, front.png is uploaded
+    files = folder_files(folder, [cover] if cover and cover.name.lower() == "cover.png" else [])
     if not files:
         console.print("[yellow]⚠ nothing to upload[/yellow]")
         return True

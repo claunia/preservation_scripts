@@ -384,12 +384,22 @@ def make_identifier(name):
     return text[:100].rstrip("._-")
 
 
+UNAVAILABLE = "\0unavailable"
+
+
 def item_owner(identifier):
-    """None when the identifier is free, otherwise the uploader of the item ("" if not known)."""
+    """None when the identifier is free, otherwise the uploader of the item ("" if not known), or
+    UNAVAILABLE when archive.org does not allow it although there is no item to see (deleted or hidden
+    items, or one differing only in case)."""
     info = get_json(f"{ARCHIVE}/metadata/{identifier}")
-    if not info:
+    if info:
+        return (info.get("metadata") or {}).get("uploader", "")
+    try:
+        check = get_json(f"{ARCHIVE}/services/check_identifier.php?output=json&identifier="
+                         f"{urllib.parse.quote(identifier, safe='')}")
+    except (IAError, ValueError):
         return None
-    return (info.get("metadata") or {}).get("uploader", "")
+    return UNAVAILABLE if check.get("code") == "not_available" else None
 
 
 def choose_identifier(folder, wanted, keys, yes):
@@ -404,7 +414,11 @@ def choose_identifier(folder, wanted, keys, yes):
         owner = item_owner(candidate)
         if owner is None:
             return candidate, False
-        if owner and email and owner.lower() == email:
+        if owner == UNAVAILABLE:
+            if wanted:
+                raise IAError(f"identifier {candidate} is not available on archive.org")
+            console.print(f"[cyan]ℹ {candidate} is not available on archive.org[/cyan]")
+        elif owner and email and owner.lower() == email:
             console.print(f"[cyan]ℹ {candidate} is already one of our items, it will be completed[/cyan]")
             return candidate, True
         if not owner and keys and not yes and confirm(f"{candidate} exists, upload into it?"):

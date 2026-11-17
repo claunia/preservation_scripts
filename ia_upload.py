@@ -15,8 +15,8 @@ Item: the identifier is made from the folder name (accents removed, other charac
 be free on archive.org, or to be an item of ours, which is then completed. It is shown for confirmation
 together with the metadata, and both can be edited.
 
-Metadata: metadata.json in the folder, otherwise its *.metadata.json sidecars, is converted: Name to title,
-Developers/Authors/Performers to creator, Publishers to publisher, ReleaseDate to date, Languages to
+Metadata: the title is the folder name, as it is. metadata.json in the folder, otherwise its *.metadata.json
+sidecars, is converted: Developers/Authors/Performers to creator, Publishers to publisher, ReleaseDate to date, Languages to
 language, Keywords/Categories/Subcategories/Systems/required operating systems to subject, plus version,
 release type, part and serial numbers and barcodes, and a description listing each disc (type, size, part
 number, ring codes, track checksums, drive used). Audio CDs go to opensource_audio (audio), folders under
@@ -479,7 +479,7 @@ def disc_description(media, number, total):
 
 def convert_metadata(folder, top, media):
     """IA metadata (dict of str or list of str) from the Aaru metadata."""
-    md = {"title": top.get("Name") or folder.resolve().name}
+    md = {"title": folder.resolve().name}
     creators = unique((top.get("Developers") or []) + (top.get("Authors") or []) + (top.get("Performers") or []))
     if creators:
         md["creator"] = creators

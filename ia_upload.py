@@ -25,8 +25,8 @@ number, ring codes, checksums, drive used). Audio CDs go to opensource_audio (au
 days.
 
 Files: every file in the folder except the folder icons (desktop.ini, desktop.ico, .directory,
-.directory.png), info.txt, backups (*.bak, *.tmp), *.sidecar.log and *.compressed.aif pending
-finalization.
+.directory.png), info.txt, PAR2 recovery files, backups (*.bak, *.tmp), *.sidecar.log and
+*.compressed.aif pending finalization.
 Subfolders are not uploaded.
 
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
@@ -70,7 +70,7 @@ IA_INI = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ia.
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "ia_upload"
 
 SKIP_NAMES = {"desktop.ini", "desktop.ico", ".directory", ".directory.png", "info.txt"}
-SKIP_SUFFIXES = (".bak", ".tmp", ".sidecar.log", ".compressed.aif")
+SKIP_SUFFIXES = (".bak", ".tmp", ".sidecar.log", ".compressed.aif", ".par2")
 MAX_PARTS = 10000
 RETRIES = 10
 

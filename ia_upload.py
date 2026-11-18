@@ -20,7 +20,8 @@ also added to the identifier). metadata.json in the folder, otherwise its *.meta
 sidecars, is converted: Developers/Authors/Performers to creator, Publishers to publisher, ReleaseDate to date, Languages to
 language, Keywords/Categories/Subcategories/Systems/required operating systems to subject, plus version,
 release type, part and serial numbers and barcodes, and a description listing each disc (type, size, part
-number, ring codes, track checksums, drive used). Audio CDs go to opensource_audio (audio), folders under
+number, ring codes, track checksums, drive used). Folders under "Audio CD", whatever their discs, and audio CDs anywhere go to opensource_audio
+(audio), folders under
 "Movies..." to opensource_movies (movies), anything else to open_source_software (software), unless
 --collection/--mediatype are given. --test uploads to test_collection, which archive.org removes after 30
 days.
@@ -589,9 +590,10 @@ def convert_metadata(folder, top, media):
         md["barcode"] = others
 
     discs = [m for key, m in media]
-    if discs and all("audio" in (m.get("DiscSubType") or "").lower() for m in discs):
+    parts = folder.resolve().parts
+    if "Audio CD" in parts or discs and all("audio" in (m.get("DiscSubType") or "").lower() for m in discs):
         md["mediatype"], md["collection"] = "audio", "opensource_audio"
-    elif any(part.lower().startswith("movies") for part in folder.resolve().parts):
+    elif any(part.lower().startswith("movies") for part in parts):
         md["mediatype"], md["collection"] = "movies", "opensource_movies"
     else:
         md["mediatype"], md["collection"] = "software", "open_source_software"

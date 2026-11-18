@@ -38,8 +38,9 @@ running the script again continues where it stopped, also inside a file. Files a
 same size and MD5 are skipped. On an item that already existed, the metadata is then updated to the one
 reviewed (except the collection).
 
-When archive.org asks to slow down (too many tasks queued for the item or the account), all the uploads
-pause together, longer each time (30 s, 1 min, 2 min... up to 15 min), and go on by themselves.
+When archive.org asks to slow down, all the uploads pause together, longer each time (30 s, 1 min, 2 min...
+up to 15 min), and go on by themselves. If nothing gets through for an hour, the folder is given up and the
+next one is uploaded; running the script again continues it. The first refusal is shown in full.
 
 Speed: archive.org is often slow on each connection, so --jobs (default 4) files, or parts of a big file,
 are sent at once, each over its own connection. The memory used is up to --jobs times --part-size."""
@@ -86,6 +87,7 @@ SKIP_SUFFIXES = (".bak", ".tmp", ".sidecar.log", ".compressed.aif", ".par2")
 THUMBNAIL = "__ia_thumb.jpg"
 MAX_PARTS = 10000
 RETRIES = 10
+SLOWDOWN_LIMIT = 3600  # seconds
 
 
 class IAError(Exception):
@@ -116,33 +118,54 @@ class Body(io.RawIOBase):
 
 
 class Throttle:
-    """Pause shared by all the uploads when archive.org asks to slow down (too many tasks queued for the
-    item or the account): they all wait, longer each time it happens again, instead of retrying together."""
+    """Pause shared by all the uploads when archive.org asks to slow down: they all wait, longer each time
+    it happens again, instead of retrying together. After SLOWDOWN_LIMIT seconds of being refused without
+    anything getting through, the folder is given up (its progress is kept for the next run)."""
 
     def __init__(self):
         self.lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
         self.until = 0.0
         self.level = 0
+        self.since = None
+        self.shown = False
 
     def wait(self):
         while (remaining := self.until - time.monotonic()) > 0:
             time.sleep(min(remaining, 5))
 
-    def slow_down(self, wait=None):
+    def slow_down(self, url, code, headers, text, wait=None):
+        """Pause the uploads, or raise IAError when archive.org has been refusing them for too long."""
         with self.lock:
-            if time.monotonic() < self.until:
+            now = time.monotonic()
+            if self.since is None:
+                self.since = now
+            refused = now - self.since
+            if refused >= SLOWDOWN_LIMIT:
+                raise IAError(f"archive.org has been asking to slow down for {refused / 60:.0f} minutes, giving up "
+                              f"this folder (run again later to continue)")
+            if now < self.until:
                 return  # already paused by another upload
             self.level += 1
             delay = int(wait) if wait and wait.isdigit() else min(900, 30 * 2 ** (self.level - 1))
-            delay = round(delay * random.uniform(1, 1.25))
-            self.until = time.monotonic() + delay
-        console.print(f"[yellow]⚠ archive.org asks to slow down (too many tasks queued), pausing the uploads "
-                      f"{delay} s[/yellow]")
+            delay = min(round(delay * random.uniform(1, 1.25)), max(1, round(SLOWDOWN_LIMIT - refused)))
+            self.until = now + delay
+            show, self.shown = not self.shown, True
+        if show:
+            console.print(f"[yellow]⚠ archive.org answered HTTP {code} to {url}:[/yellow]")
+            for name, value in headers.items():
+                if name.lower() not in ("set-cookie",):
+                    console.print(f"  {name}: {value}", style="dim", markup=False, highlight=False)
+            console.print(f"  {text.strip()}", style="dim", markup=False, highlight=False)
+        console.print(f"[yellow]⚠ archive.org asks to slow down, pausing the uploads {delay} s "
+                      f"(refused for {refused / 60:.0f} of at most {SLOWDOWN_LIMIT // 60} minutes)[/yellow]")
 
     def success(self):
-        if self.level:
-            with self.lock:
-                self.level = max(0, self.level - 1)
+        with self.lock:
+            self.level = max(0, self.level - 1)
+            self.since = None
 
 
 THROTTLE = Throttle()
@@ -178,10 +201,15 @@ def request(method, url, headers=None, data=None, sent=None, ok=(200,)):
             text = e.read().decode("utf-8", "replace")
             if e.code in ok:
                 return e.code, e.headers, text.encode()
+            resource = s3_field(text, "Resource")
+            if "spam" in resource.lower():
+                # Refused by the spam filter, under the same SlowDown code: waiting does not help
+                request_id = s3_field(text, "RequestId")
+                raise IAError(f"{resource}{' (RequestId ' + request_id + ')' if request_id else ''}") from None
             if e.code in (429, 503) and ("slowdown" in text.lower() or "reduce your request rate" in text.lower()):
                 if sent and progress[0]:
                     sent(-progress[0])
-                THROTTLE.slow_down(e.headers.get("Retry-After"))
+                THROTTLE.slow_down(url, e.code, e.headers, text, e.headers.get("Retry-After"))
                 continue
             if e.code not in (408, 429, 500, 502, 503, 504):
                 raise IAError(f"{method} {url}: HTTP {e.code} {s3_message(text) or e.reason}") from None
@@ -198,9 +226,13 @@ def request(method, url, headers=None, data=None, sent=None, ok=(200,)):
     raise IAError(f"{method} {url}: gave up after {RETRIES} attempts")
 
 
+def s3_field(text, tag):
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", text or "", re.S)
+    return " ".join(match.group(1).split()) if match else ""
+
+
 def s3_message(text):
-    match = re.search(r"<Message>(.*?)</Message>", text or "", re.S)
-    return match.group(1).strip() if match else ""
+    return s3_field(text, "Message")
 
 
 def run_parallel(jobs, tasks, stop):
@@ -926,6 +958,7 @@ def remote_files(identifier):
 
 def process(folder, args, keys):
     console.rule(f"[bold]{folder.resolve().name}")
+    THROTTLE.reset()
     make_covers(folder, args.dry_run)
     files = folder_files(folder)
     if not files:

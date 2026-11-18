@@ -15,7 +15,8 @@ Item: the identifier is made from the folder name (accents removed, other charac
 be free on archive.org, or to be an item of ours, which is then completed. It is shown for confirmation
 together with the metadata, and both can be edited.
 
-Metadata: the title is the folder name, as it is. metadata.json in the folder, otherwise its *.metadata.json
+Metadata: the title is the folder name, as it is, followed by the --title-suffix text if given (which is
+also added to the identifier). metadata.json in the folder, otherwise its *.metadata.json
 sidecars, is converted: Developers/Authors/Performers to creator, Publishers to publisher, ReleaseDate to date, Languages to
 language, Keywords/Categories/Subcategories/Systems/required operating systems to subject, plus version,
 release type, part and serial numbers and barcodes, and a description listing each disc (type, size, part
@@ -468,9 +469,9 @@ def item_owner(identifier):
     return UNAVAILABLE if check.get("code") == "not_available" else None
 
 
-def choose_identifier(folder, wanted, keys, yes):
+def choose_identifier(folder, wanted, keys, yes, suffix=None):
     """Free identifier, or one of our items to complete. Returns (identifier, exists)."""
-    base = wanted or make_identifier(folder.resolve().name)
+    base = wanted or make_identifier(f"{folder.resolve().name} {suffix or ''}")
     email = (keys or {}).get("email", "").lower()
     candidate, n = base, 1
     while True:
@@ -968,6 +969,8 @@ def process(folder, args, keys):
     if not media:
         console.print("[yellow]⚠ no Aaru metadata found, only the folder name is used[/yellow]")
     md = convert_metadata(folder, top, media)
+    if args.title_suffix:
+        md["title"] = f"{md['title']} {args.title_suffix.strip()}"
     if args.test:
         md["collection"] = "test_collection"
     if args.collection:
@@ -975,7 +978,7 @@ def process(folder, args, keys):
     if args.mediatype:
         md["mediatype"] = args.mediatype
 
-    identifier, exists = choose_identifier(folder, args.identifier, keys, args.yes)
+    identifier, exists = choose_identifier(folder, args.identifier, keys, args.yes, args.title_suffix)
     if args.dry_run:
         show_metadata(identifier, md, files)
         console.print(f"[dim]dry run: would upload to {ARCHIVE}/details/{identifier}"
@@ -1021,6 +1024,8 @@ def main():
     parser.add_argument("--login", action="store_true", help="log in again, replacing the stored keys")
     parser.add_argument("--logout", action="store_true", help="remove the stored keys")
     parser.add_argument("-i", "--identifier", help="item identifier (only with a single folder)")
+    parser.add_argument("-s", "--title-suffix", metavar="TEXT",
+                        help='text added at the end of the title and identifier, e.g. -s "(Linux)"')
     parser.add_argument("-c", "--collection", help="collection, instead of the one chosen by disc type")
     parser.add_argument("-m", "--mediatype", help="mediatype, instead of the one chosen by disc type")
     parser.add_argument("--test", action="store_true", help="upload to test_collection (removed after 30 days)")

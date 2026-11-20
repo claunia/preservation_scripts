@@ -32,7 +32,7 @@ Files: every file in the folder except the folder icons (desktop.ini, desktop.ic
 Before uploading, front.png is made from front.jxl, and __ia_thumb.jpg, so that the cover is the item
 thumbnail, from front.png, otherwise from cover.jxl, the front cover of a CD, DVD or Blu-ray inlay.jxl or
 the folder icon. A cover.png made by earlier versions is removed.
-Subfolders are not uploaded.
+Subfolders are only uploaded with --recursive, keeping their paths (Fotos/front.jpg).
 
 Resume: files bigger than --part-size are sent in parts (S3 multipart upload), and the parts sent are
 recorded in ~/.local/state/ia_upload/<identifier>.json, so after an interruption (Ctrl+C, network errors)
@@ -375,22 +375,39 @@ def credentials(force=False):
 # ---------------------------------------------------------------- Folder, identifier and metadata
 
 
-def folder_files(folder):
+def remote_name(folder, path):
+    """Name of a file in the item: its path inside the folder, with / between subfolders."""
+    return path.relative_to(folder).as_posix()
+
+
+def folder_files(folder, recursive=False):
+    """Files to upload, those of the subfolders too when recursive."""
     files, skipped = [], []
     for p in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
         if p.is_dir():
-            console.print(f"[yellow]⚠ subfolder {p.name} is not uploaded[/yellow]")
+            if recursive and not p.name.startswith("."):
+                sub_files, sub_skipped = folder_files(p, True)
+                files += sub_files
+                skipped += sub_skipped
+            elif not recursive:
+                console.print(f"[yellow]⚠ subfolder {p.name} is not uploaded (-r uploads it)[/yellow]")
         elif not p.is_file():
             continue
         elif p.name.lower() in SKIP_NAMES or p.name.lower().endswith(SKIP_SUFFIXES):
             skipped.append(p)
         else:
             files.append(p)
+    return files, skipped
+
+
+def upload_files(folder, recursive):
+    files, skipped = folder_files(folder, recursive)
     if any(p.name.lower().endswith(".compressed.aif") for p in skipped):
         console.print("[yellow]⚠ there are *.compressed.aif images pending finalization, they are not uploaded[/yellow]")
     # Small files first, so the item is created by a simple upload, and metadata.json last, so the item is
     # derived once, when everything is there
-    files.sort(key=lambda p: (p.name == "metadata.json", p.stat().st_size > 64 * 1024 * 1024, p.name.lower()))
+    files.sort(key=lambda p: (p.parent == folder and p.name == "metadata.json", p.stat().st_size > 64 * 1024 * 1024,
+                              remote_name(folder, p).lower()))
     return files
 
 
@@ -616,7 +633,7 @@ def convert_metadata(folder, top, media):
     return md
 
 
-def show_metadata(identifier, md, files):
+def show_metadata(identifier, md, files, folder):
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column(style="bold cyan", justify="right")
     table.add_column(overflow="fold")
@@ -624,14 +641,14 @@ def show_metadata(identifier, md, files):
     for key, value in md.items():
         table.add_row(key, "; ".join(value) if isinstance(value, list) else str(value))
     total = sum(p.stat().st_size for p in files)
-    table.add_row("files", f"{len(files)} ({human_size(total)}): " + ", ".join(p.name for p in files))
+    table.add_row("files", f"{len(files)} ({human_size(total)}): " + ", ".join(remote_name(folder, p) for p in files))
     console.print(table)
 
 
-def review(identifier, md, files):
+def review(identifier, md, files, folder):
     """Let the identifier and metadata be edited. Returns (identifier, metadata), or None to skip the folder."""
     while True:
-        show_metadata(identifier, md, files)
+        show_metadata(identifier, md, files, folder)
         answer = ask("Upload? [y]es / [e]dit a field / [s]kip folder / [q]uit: ").lower()
         if answer.startswith("y"):
             return identifier, md
@@ -737,7 +754,8 @@ def file_md5(path, entry):
 
 
 class Uploader:
-    def __init__(self, identifier, keys, md, part_size, derive, progress, jobs):
+    def __init__(self, folder, identifier, keys, md, part_size, derive, progress, jobs):
+        self.folder = folder
         self.identifier = identifier
         self.jobs = jobs
         # At most jobs requests sending data at once, whether parts of one file or several files
@@ -765,16 +783,19 @@ class Uploader:
             tmp.replace(self.state_path)
 
     def url(self, path, query=""):
-        return f"{S3}/{self.identifier}/{urllib.parse.quote(path.name, safe='')}{query}"
+        return f"{S3}/{self.identifier}/{urllib.parse.quote(self.name(path), safe='/')}{query}"
+
+    def name(self, path):
+        return remote_name(self.folder, path)
 
     def entry(self, path):
         """State of a file, started again if the file changed since."""
         stat = path.stat()
         with self.lock:
-            entry = self.state["files"].get(path.name)
+            entry = self.state["files"].get(self.name(path))
             if not entry or entry.get("size") != stat.st_size or entry.get("mtime") != stat.st_mtime_ns:
                 entry = {"size": stat.st_size, "mtime": stat.st_mtime_ns}
-                self.state["files"][path.name] = entry
+                self.state["files"][self.name(path)] = entry
             return entry
 
     def wait_for_slot(self):
@@ -798,7 +819,8 @@ class Uploader:
             if entry.get("done"):
                 continue
             # archive.org renames an uploaded __ia_thumb.jpg to ___ia_thumb.jpg and makes its own from it
-            names = (path.name, "_" + path.name) if path.name == THUMBNAIL else (path.name,)
+            name = self.name(path)
+            names = (name, "_" + name) if name == THUMBNAIL else (name,)
             if any(int(remote[name].get("size", -1)) == entry["size"] and remote[name].get("md5") == file_md5(path, entry)
                    for name in names if name in remote):
                 entry["done"] = True
@@ -818,7 +840,7 @@ class Uploader:
         derive) once all the others are there; the rest, and the parts of big files, jobs at a time."""
         def one(path, last=False):
             return lambda: (self.upload(path, last, size_hint, overall),
-                            self.progress.console.print(f"[green]✔[/green] {path.name}"))
+                            self.progress.console.print(f"[green]✔[/green] {self.name(path)}"))
 
         if todo:
             one(todo[0], len(todo) == 1)()
@@ -828,7 +850,7 @@ class Uploader:
 
     def upload(self, path, last, size_hint, overall):
         entry = self.entry(path)
-        task = self.progress.add_task(path.name, total=entry["size"])
+        task = self.progress.add_task(self.name(path), total=entry["size"])
 
         def sent(n):
             self.progress.advance(task, n)
@@ -863,7 +885,7 @@ class Uploader:
         if entry.get("upload_id"):
             parts = self.uploaded_parts(path, entry)
             if parts is None:
-                console.print(f"[yellow]⚠ the interrupted upload of {path.name} expired, starting again[/yellow]")
+                console.print(f"[yellow]⚠ the interrupted upload of {self.name(path)} expired, starting again[/yellow]")
                 self.abort(path, entry)
             else:
                 entry["parts"] = parts
@@ -963,7 +985,7 @@ def process(folder, args, keys):
     console.rule(f"[bold]{folder.resolve().name}")
     THROTTLE.reset()
     make_covers(folder, args.dry_run)
-    files = folder_files(folder)
+    files = upload_files(folder, args.recursive)
     if not files:
         console.print("[yellow]⚠ nothing to upload[/yellow]")
         return True
@@ -982,14 +1004,14 @@ def process(folder, args, keys):
 
     identifier, exists = choose_identifier(folder, args.identifier, keys, args.yes, args.title_suffix)
     if args.dry_run:
-        show_metadata(identifier, md, files)
+        show_metadata(identifier, md, files, folder)
         console.print(f"[dim]dry run: would upload to {ARCHIVE}/details/{identifier}"
                       f"{' (existing item)' if exists else ''}[/dim]")
         if exists:
             update_metadata(identifier, keys, md, True)
         return True
     if not args.yes:
-        reviewed = review(identifier, md, files)
+        reviewed = review(identifier, md, files, folder)
         if reviewed is None:
             return True
         if reviewed[0] != identifier:
@@ -999,7 +1021,7 @@ def process(folder, args, keys):
     columns = (TextColumn("{task.description}", markup=False), BarColumn(), DownloadColumn(),
                TransferSpeedColumn(), TimeRemainingColumn())
     with Progress(*columns, console=console) as progress:
-        uploader = Uploader(identifier, keys, md, args.part_size * 1024 * 1024, not args.no_derive, progress,
+        uploader = Uploader(folder, identifier, keys, md, args.part_size * 1024 * 1024, not args.no_derive, progress,
                             args.jobs)
         todo = uploader.pending(files, remote_files(identifier) if exists else {})
         if not todo:
@@ -1025,6 +1047,8 @@ def main():
     parser.add_argument("folders", nargs="*", type=Path, help="folders to upload (default: the current one)")
     parser.add_argument("--login", action="store_true", help="log in again, replacing the stored keys")
     parser.add_argument("--logout", action="store_true", help="remove the stored keys")
+    parser.add_argument("-r", "--recursive", action="store_true",
+                        help="upload the subfolders too, keeping their paths in the item")
     parser.add_argument("-i", "--identifier", help="item identifier (only with a single folder)")
     parser.add_argument("-s", "--title-suffix", metavar="TEXT",
                         help='text added at the end of the title and identifier, e.g. -s "(Linux)"')
@@ -1060,13 +1084,18 @@ def main():
             keys = credentials(force=args.login)
         elif CREDENTIALS.exists():
             keys = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
-        failed = 0
+        failed = []
         for folder in folders:
             try:
                 process(folder, args, keys)
             except IAError as e:
-                failed += 1
+                failed.append(folder)
                 console.print(f"[bold red]✖[/bold red] {folder}: {e}", style="red")
+        if len(folders) > 1:
+            console.rule()
+            console.print(f"{len(folders) - len(failed)} of {len(folders)} folders done")
+            for folder in failed:
+                console.print(f"[red]✖ {folder}[/red]")
     except (Quit, KeyboardInterrupt):
         console.print("\n[yellow]Stopped. Run the script again to continue the upload where it was.[/yellow]")
         sys.exit(130)
